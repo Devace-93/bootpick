@@ -1,4 +1,12 @@
-# bootpick
+# bootpick `beta`
+
+> **Status: beta, untested on real hardware.** Everything here has only been
+> exercised in QEMU/OVMF so far: no physical machine has booted bootpick yet.
+> Try it from a USB stick before installing it on an internal disk, keep your
+> existing boot loaders in place (the installer does), and know how to reach
+> your firmware's boot menu. Mouse support depends on the firmware exposing a
+> pointer device.
+
 
 A mouse-driven, themeable boot picker for UEFI machines, written in Rust
 (`no_std`, [uefi-rs](https://github.com/rust-osdev/uefi-rs)). It replaces the
