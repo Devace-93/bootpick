@@ -446,9 +446,16 @@ impl<'a> App<'a> {
                 self.text_c(true, fs, cx + 1, ly + 2, t.bg0.alpha(160), &label);
             }
             self.text_c(true, fs, cx, ly, color, &label);
-            if item.hidden {
+            let location = self.scan.entries[item.entry].location.clone();
+            let sub = match (location.is_empty(), item.hidden) {
+                (false, true) => format!("{}  ·  hidden", location),
+                (false, false) => location,
+                (true, true) => "hidden".to_string(),
+                (true, false) => String::new(),
+            };
+            if !sub.is_empty() {
                 let lh = font::line_height(&self.fonts.bold, fs);
-                self.text_c(false, 15.0 * self.s, cx, ly + lh, t.text_dim, "hidden");
+                self.text_c(false, 15.0 * self.s, cx, ly + lh, t.text_dim, &sub);
             }
             self.hits.push(Hit { rect: outer, action: Action::Tile(k) });
         }
@@ -690,7 +697,10 @@ impl<'a> App<'a> {
                 }
                 self.hits.push(Hit { rect: Rect::new(tx - self.px(8.0), r.y, text_w + self.px(8.0), r.h), action: ea });
             }
-            let detail = if entry.title == item.alias { entry.detail.clone() } else { format!("{}  ·  {}", entry.title, entry.detail) };
+            let mut detail = if entry.title == item.alias { entry.detail.clone() } else { format!("{}  ·  {}", entry.title, entry.detail) };
+            if !entry.location.is_empty() {
+                detail = format!("{}  ·  {}", entry.location, detail);
+            }
             let detail = font::fit(&self.fonts.regular, 14.0 * self.s, &detail, text_w);
             self.text(false, 14.0 * self.s, tx, r.y + self.px(36.0), t.text_dim, &detail);
             // kind tag

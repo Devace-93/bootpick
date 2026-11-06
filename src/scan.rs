@@ -29,12 +29,16 @@ pub struct Entry {
     pub icon: String,
     pub kind: Kind,
     pub hidden_default: bool,
+    /// Where the entry lives ("NVMe p1"), set only when it is needed to tell
+    /// same-named entries apart.
+    pub location: String,
 }
 
 #[allow(dead_code)]
 pub struct Volume {
     pub handle: Handle,
     pub key: String,
+    pub disk: String,
 }
 
 pub struct Scan {
@@ -91,11 +95,12 @@ pub fn scan() -> Scan {
     for (i, h) in handles.into_iter().enumerate() {
         let key = esp::volume_key(h, i);
         let vol = volumes.len();
-        volumes.push(Volume { handle: h, key: key.clone() });
+        volumes.push(Volume { handle: h, key: key.clone(), disk: esp::disk_label(h) });
         let Some(mut fs) = esp::open_fs(h) else { continue };
         scan_volume(&mut fs, vol, &key, &mut entries);
     }
 
+    disambiguate(&mut entries, &volumes);
     scan_firmware_options(&mut entries);
     let fw_setup_supported = os_indications_supported() & 1 != 0;
 
@@ -117,6 +122,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
             icon: "os_win".into(),
             kind: Kind::Efi { vol, path: win.into() },
             hidden_default: false,
+            location: String::new(),
         });
     }
 
@@ -124,6 +130,9 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
     let sd_boot = "\\EFI\\systemd\\systemd-bootx64.efi";
     let has_sd = esp::exists(fs, sd_boot);
     let mut sd_entries = 0;
+    // \EFI\<dir> folders that only hold kernels/initrds referenced by BLS entries
+    // (e.g. Pop!_OS kernelstub's \EFI\Pop_OS-<uuid>\vmlinuz.efi). Not loaders.
+    let mut bls_dirs: Vec<String> = Vec::new();
     if has_sd {
         for (name, is_dir) in esp::list_dir(fs, "\\loader\\entries") {
             if is_dir || !name.to_ascii_lowercase().ends_with(".conf") {
@@ -141,10 +150,19 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
                 let k = it.next().unwrap_or("").to_ascii_lowercase();
                 let v = it.next().unwrap_or("").trim().to_string();
                 match k.as_str() {
-                    "title" => title = v,
-                    "version" => version = v,
-                    "efi" => is_efi = Some(v),
+                    "title" => title = v.clone(),
+                    "version" => version = v.clone(),
+                    "efi" => is_efi = Some(v.clone()),
                     _ => {}
+                }
+                if matches!(k.as_str(), "linux" | "initrd" | "efi") {
+                    let parts: Vec<&str> = v.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+                    if parts.len() >= 3 && parts[0].eq_ignore_ascii_case("efi") {
+                        let d = parts[1].to_ascii_lowercase();
+                        if !bls_dirs.contains(&d) {
+                            bls_dirs.push(d);
+                        }
+                    }
                 }
             }
             let hidden = looks_secondary(stem) || looks_secondary(&title);
@@ -154,7 +172,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
                 Some(p) if !p.is_empty() => Kind::Efi { vol, path: p.replace('/', "\\") },
                 _ => Kind::LinuxBls { vol, sd_boot: sd_boot.into(), entry: stem.into() },
             };
-            out.push(Entry { id: mk_id(&path), title, detail, icon, kind, hidden_default: hidden });
+            out.push(Entry { id: mk_id(&path), title, detail, icon, kind, hidden_default: hidden, location: String::new() });
             sd_entries += 1;
         }
         out.push(Entry {
@@ -164,6 +182,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
             icon: "os_systemd".into(),
             kind: Kind::Efi { vol, path: sd_boot.into() },
             hidden_default: true,
+            location: String::new(),
         });
     }
     let _ = sd_entries;
@@ -174,7 +193,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
             continue;
         }
         let ld = dir.to_ascii_lowercase();
-        if ld == "microsoft" || ld == "systemd" || ld == "bootpick" {
+        if ld == "microsoft" || ld == "systemd" || ld == "bootpick" || bls_dirs.contains(&ld) || (has_sd && ld == "linux") {
             continue;
         }
         let dir_path = format!("\\EFI\\{}", dir);
@@ -184,7 +203,11 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
             .filter(|(n, d)| !d && n.to_ascii_lowercase().ends_with(".efi"))
             .map(|(n, _)| n.clone())
             .collect();
-        if efis.is_empty() {
+        let is_kernel = |n: &String| {
+            let l = n.to_ascii_lowercase();
+            l.starts_with("vmlinuz") || l.starts_with("linux") || l.starts_with("kernel")
+        };
+        if efis.is_empty() || efis.iter().all(is_kernel) {
             continue;
         }
         // Prefer shim, then grub, then anything else; the rest become hidden extras.
@@ -213,6 +236,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
                 icon,
                 kind: Kind::Efi { vol, path },
                 hidden_default: !is_primary || is_fallback_dir || ld == "tools",
+                location: String::new(),
             });
         }
     }
@@ -230,6 +254,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
             icon: icon_for(&name).to_string(),
             kind: Kind::Efi { vol, path },
             hidden_default: true,
+            location: String::new(),
         });
     }
 }
@@ -288,7 +313,33 @@ fn scan_firmware_options(out: &mut Vec<Entry>) {
             icon: icon_for(&desc).to_string(),
             kind: Kind::BootNext(n),
             hidden_default: true,
+            location: String::new(),
         });
+    }
+}
+
+/// When several entries that are shown by default share a title (two ESPs with
+/// \EFI\ubuntu, for example), append where each lives so they can be told apart.
+fn disambiguate(entries: &mut [Entry], volumes: &[Volume]) {
+    let vol_of = |k: &Kind| match k {
+        Kind::Efi { vol, .. } | Kind::LinuxBls { vol, .. } => Some(*vol),
+        Kind::BootNext(_) => None,
+    };
+    let titles: Vec<String> = entries.iter().map(|e| e.title.clone()).collect();
+    for i in 0..entries.len() {
+        if entries[i].hidden_default {
+            continue;
+        }
+        let dup = (0..entries.len()).any(|j| j != i && !entries[j].hidden_default && titles[j] == titles[i]);
+        if !dup {
+            continue;
+        }
+        if let Some(v) = vol_of(&entries[i].kind) {
+            let disk = volumes.get(v).map(|x| x.disk.clone()).unwrap_or_default();
+            if !disk.is_empty() {
+                entries[i].location = disk;
+            }
+        }
     }
 }
 

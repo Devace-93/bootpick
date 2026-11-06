@@ -50,6 +50,31 @@ pub fn volume_key(handle: Handle, index: usize) -> String {
     format!("vol-{}", index)
 }
 
+/// Short human label for where a volume lives, e.g. "NVMe p1", "SATA p6", "USB p1".
+pub fn disk_label(handle: Handle) -> String {
+    let Some(dp) = device_path_of(handle) else { return String::new() };
+    let mut bus = "";
+    let mut part = 0u32;
+    for node in dp.node_iter() {
+        match node.as_enum() {
+            Ok(DevicePathNodeEnum::MessagingNvmeNamespace(_)) => bus = "NVMe",
+            Ok(DevicePathNodeEnum::MessagingSata(_)) => bus = "SATA",
+            Ok(DevicePathNodeEnum::MessagingAtapi(_)) => bus = "ATA",
+            Ok(DevicePathNodeEnum::MessagingUsb(_)) | Ok(DevicePathNodeEnum::MessagingUsbClass(_)) => bus = "USB",
+            Ok(DevicePathNodeEnum::MessagingScsi(_)) => if bus.is_empty() { bus = "SCSI" },
+            Ok(DevicePathNodeEnum::MessagingSd(_)) | Ok(DevicePathNodeEnum::MessagingEmmc(_)) => bus = "SD/eMMC",
+            Ok(DevicePathNodeEnum::MediaHardDrive(hd)) => part = hd.partition_number(),
+            _ => {}
+        }
+    }
+    match (bus, part) {
+        ("", 0) => String::new(),
+        ("", p) => format!("partition {}", p),
+        (b, 0) => b.to_string(),
+        (b, p) => format!("{} p{}", b, p),
+    }
+}
+
 pub fn cpath(path: &str) -> Option<CString16> {
     CString16::try_from(path).ok()
 }

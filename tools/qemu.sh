@@ -25,6 +25,11 @@ DISPLAY_ARGS=(-display gtk)
 if [ "${1:-}" = "headless" ]; then
   DISPLAY_ARGS=(-display none -vnc :9 -monitor "unix:$RUN/monitor.sock,server,nowait")
 fi
+# Optional second ESP on a virtual NVMe disk (tests duplicate loaders across disks).
+EXTRA=()
+if [ -d "$ROOT/esp2" ]; then
+  EXTRA=(-drive "if=none,id=esp2,format=raw,file=fat:rw:$ROOT/esp2" -device nvme,drive=esp2,serial=bootpick2)
+fi
 ACCEL=(-cpu max)
 if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL=(-enable-kvm -cpu host); fi
 exec qemu-system-x86_64 \
@@ -33,6 +38,7 @@ exec qemu-system-x86_64 \
   -drive if=pflash,format=raw,readonly=on,file="$CODE" \
   -drive if=pflash,format=raw,file="$VARS" \
   -drive format=raw,file="fat:rw:$ROOT/esp" \
+  "${EXTRA[@]}" \
   -device qemu-xhci -device usb-mouse -device usb-tablet -device usb-kbd \
   -vga std -net none \
   "${DISPLAY_ARGS[@]}"
