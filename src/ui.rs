@@ -147,6 +147,8 @@ impl<'a> App<'a> {
         let bg_idx = bg_list.iter().position(|b| b.eq_ignore_ascii_case(&cfg.background)).unwrap_or(0);
         let theme_idx = theme_by_id(&cfg.theme);
         let input = Input::new(w, h, cfg.mouse_speed);
+        crate::trace::line(&format!("display {}x{}, input: {}", w, h, input.stats));
+        crate::trace::flush();
         let cursor = make_cursor(if s >= 1.4 { 3 } else if s >= 0.8 { 2 } else { 1 });
         let countdown = if cfg.timeout > 0 && status.is_none() { Some((cfg.timeout as i32) * 1000 / TICK_MS as i32) } else { None };
 
@@ -1210,6 +1212,8 @@ pub fn run(scan: &Scan) -> ! {
         match outcome {
             Outcome::Launch(kind) => {
                 if let Err(e) = boot::launch(&kind, &scan.volumes) {
+                    crate::trace::line(&format!("launch failed: {}", e));
+                    crate::trace::flush();
                     status = Some(format!("Could not start: {}", e));
                 }
             }
@@ -1218,8 +1222,16 @@ pub fn run(scan: &Scan) -> ! {
                     status = Some(e);
                 }
             }
-            Outcome::Reboot => boot::reboot(),
-            Outcome::Shutdown => boot::shutdown(),
+            Outcome::Reboot => {
+                crate::trace::line("user: restart");
+                crate::trace::flush();
+                boot::reboot()
+            }
+            Outcome::Shutdown => {
+                crate::trace::line("user: shut down");
+                crate::trace::flush();
+                boot::shutdown()
+            }
         }
     }
 }

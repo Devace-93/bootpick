@@ -25,6 +25,8 @@ DISPLAY_ARGS=(-display gtk)
 if [ "${1:-}" = "headless" ]; then
   DISPLAY_ARGS=(-display none -vnc :9 -monitor "unix:$RUN/monitor.sock,server,nowait")
 fi
+# BOOTPICK_IMG=/path/esp.img uses a real FAT image instead of QEMU's vvfat
+# (vvfat mishandles repeated guest writes, so use an image to test file writes).
 # Optional second ESP on a virtual NVMe disk (tests duplicate loaders across disks).
 EXTRA=()
 if [ -d "$ROOT/esp2" ]; then
@@ -37,7 +39,7 @@ exec qemu-system-x86_64 \
   -serial "file:$RUN/serial.log" \
   -drive if=pflash,format=raw,readonly=on,file="$CODE" \
   -drive if=pflash,format=raw,file="$VARS" \
-  -drive format=raw,file="fat:rw:$ROOT/esp" \
+  -drive format=raw,file="${BOOTPICK_IMG:-fat:rw:$ROOT/esp}" \
   "${EXTRA[@]}" \
   -device qemu-xhci -device usb-mouse -device usb-tablet -device usb-kbd \
   -vga std -net none \

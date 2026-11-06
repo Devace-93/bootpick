@@ -13,8 +13,10 @@ mod font;
 mod gfx;
 mod input;
 mod scan;
+mod trace;
 mod ui;
 
+use alloc::string::String;
 use uefi::prelude::*;
 
 #[entry]
@@ -22,8 +24,28 @@ fn main() -> Status {
     let _ = uefi::helpers::init();
     // Firmware watchdogs reboot after ~5 minutes in a menu; disable it.
     let _ = uefi::boot::set_watchdog_timer(0, 0x1_0000, None);
+    trace::line("==== bootpick start");
+    trace::line(&alloc::format!(
+        "firmware: {} rev {:#x}, UEFI {}",
+        uefi::system::firmware_vendor(),
+        uefi::system::firmware_revision(),
+        uefi::system::uefi_revision()
+    ));
     boot::load_drivers();
     let scan = scan::scan();
-    log::info!("bootpick: {} volumes, {} entries", scan.volumes.len(), scan.entries.len());
+    trace::line(&alloc::format!("scan: {} volumes, {} entries", scan.volumes.len(), scan.entries.len()));
+    for (i, v) in scan.volumes.iter().enumerate() {
+        trace::line(&alloc::format!("  volume {}: {} ({})", i, v.key, v.disk));
+    }
+    for e in &scan.entries {
+        trace::line(&alloc::format!(
+            "  entry: {}{} [{:?}]{}",
+            e.title,
+            if e.location.is_empty() { String::new() } else { alloc::format!(" @ {}", e.location) },
+            e.kind,
+            if e.hidden_default { " hidden" } else { "" }
+        ));
+    }
+    trace::flush();
     ui::run(&scan)
 }

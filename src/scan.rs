@@ -170,7 +170,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
             let icon = icon_for(&title).to_string();
             let kind = match is_efi {
                 Some(p) if !p.is_empty() => Kind::Efi { vol, path: p.replace('/', "\\") },
-                _ => Kind::LinuxBls { vol, sd_boot: sd_boot.into(), entry: stem.into() },
+                _ => Kind::LinuxBls { vol, sd_boot: sd_boot.into(), entry: name.clone() },
             };
             out.push(Entry { id: mk_id(&path), title, detail, icon, kind, hidden_default: hidden, location: String::new() });
             sd_entries += 1;

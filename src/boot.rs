@@ -15,6 +15,8 @@ const SD_LOADER_VENDOR: VariableVendor = VariableVendor(guid!("4a67b082-0a4c-41c
 
 /// Starts the entry. Returns only if launching failed.
 pub fn launch(kind: &Kind, volumes: &[Volume]) -> Result<(), String> {
+    crate::trace::line(&format!("launch: {:?}", kind));
+    crate::trace::flush();
     match kind {
         Kind::Efi { vol, path } => chainload(volumes, *vol, path),
         Kind::LinuxBls { vol, sd_boot, entry } => {
@@ -24,6 +26,7 @@ pub fn launch(kind: &Kind, volumes: &[Volume]) -> Result<(), String> {
             let volatile = VariableAttributes::BOOTSERVICE_ACCESS | VariableAttributes::RUNTIME_ACCESS;
             runtime::set_variable(uefi::cstr16!("LoaderEntryOneShot"), &SD_LOADER_VENDOR, volatile, &v)
                 .map_err(|e| format!("LoaderEntryOneShot: {:?}", e.status()))?;
+            crate::trace::line(&format!("  LoaderEntryOneShot = {}", entry));
             let zero: Vec<u8> = "0\0".encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
             let _ = runtime::set_variable(uefi::cstr16!("LoaderConfigTimeoutOneShot"), &SD_LOADER_VENDOR, volatile, &zero);
             chainload(volumes, *vol, sd_boot)
@@ -48,11 +51,14 @@ fn chainload(volumes: &[Volume], vol: usize, path: &str) -> Result<(), String> {
         .finalize()
         .map_err(|e| format!("{:?}", e))?;
     let full = base.append_path(file_node).map_err(|e| format!("{:?}", e))?;
+    crate::trace::line(&format!("  chainload {} from volume {} ({})", path, vol, volume.disk));
     let image = boot::load_image(
         boot::image_handle(),
         LoadImageSource::FromDevicePath { device_path: &full, boot_policy: BootPolicy::BootSelection },
     )
     .map_err(|e| format!("load {}: {:?}", path, e.status()))?;
+    crate::trace::line("  image loaded, starting it (anything after this is the loader's own doing)");
+    crate::trace::flush();
     match boot::start_image(image) {
         Ok(()) => Err(format!("{} returned to the menu", path)),
         Err(e) => Err(format!("{}: {:?}", path, e.status())),
@@ -105,11 +111,11 @@ pub fn load_drivers() {
             Ok(img) => match boot::start_image(img) {
                 Ok(()) => {
                     loaded += 1;
-                    log::info!("bootpick: loaded driver {}", name);
+                    crate::trace::line(&format!("driver loaded: {}", name));
                 }
-                Err(e) => log::warn!("bootpick: driver {} failed: {:?}", name, e.status()),
+                Err(e) => crate::trace::line(&format!("driver {} failed: {:?}", name, e.status())),
             },
-            Err(e) => log::warn!("bootpick: could not load driver {}: {:?}", name, e.status()),
+            Err(e) => crate::trace::line(&format!("could not load driver {}: {:?}", name, e.status())),
         }
     }
     if loaded > 0 {
