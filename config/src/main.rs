@@ -5,7 +5,7 @@
 //!   bootpick-config --demo DIR[:LABEL][,DIR2[:LABEL]] [--demo-root UUID=DIR]...
 //!                                      use plain directories as EFI volumes (no root)
 //!   bootpick-config --screenshot OUT.png [--open-theme-editor] [--preview-lang-menu]
-//!                   [--preview-settings] [--preview-all] [--scroll-entries]
+//!                   [--preview-settings] [--preview-all] [--scroll-entries] [--show-dialog quit|revert]
 
 mod app;
 mod helper;
@@ -30,6 +30,7 @@ fn main() -> eframe::Result {
     let mut preview_settings = false;
     let mut preview_all = false;
     let mut scroll_entries = false;
+    let mut show_dialog = String::new();
     let mut overrides = host::RootOverride::new();
     let mut demo: Option<String> = None;
     let mut i = 1;
@@ -54,6 +55,10 @@ fn main() -> eframe::Result {
             "--preview-settings" => preview_settings = true,
             "--preview-all" => preview_all = true,
             "--scroll-entries" => scroll_entries = true,
+            "--show-dialog" => {
+                show_dialog = args.get(i + 1).cloned().unwrap_or_default();
+                i += 1;
+            }
             _ => {}
         }
         i += 1;
@@ -73,6 +78,6 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default().with_inner_size([1500.0, 920.0]).with_min_inner_size([1100.0, 700.0]).with_title("bootpick settings").with_app_id("bootpick-settings"),
         ..Default::default()
     };
-    let opts = app::Opts { mode, screenshot, open_theme_editor, preview_lang_menu, preview_settings, preview_all, scroll_entries };
+    let opts = app::Opts { mode, screenshot, open_theme_editor, preview_lang_menu, preview_settings, preview_all, scroll_entries, show_dialog };
     eframe::run_native("bootpick settings", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, opts).start(&cc.egui_ctx)))))
 }

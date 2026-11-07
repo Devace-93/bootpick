@@ -38,6 +38,7 @@ pub struct Opts {
     pub preview_settings: bool,
     pub preview_all: bool,
     pub scroll_entries: bool,
+    pub show_dialog: String,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -226,6 +227,10 @@ pub struct App {
     textures: HashMap<String, Option<TextureHandle>>,
     text: Option<TextEngine>,
     confirm_uninstall: bool,
+    confirm_quit: bool,
+    confirm_revert: bool,
+    close_after_save: bool,
+    allow_close: bool,
     uninstalled: bool,
     lang: &'static str,
     strings: &'static [&'static str; crate::i18n_app::COUNT],
@@ -278,6 +283,10 @@ impl App {
             textures: HashMap::new(),
             text: None,
             confirm_uninstall: false,
+            confirm_quit: opts.show_dialog == "quit",
+            confirm_revert: opts.show_dialog == "revert",
+            close_after_save: false,
+            allow_close: false,
             uninstalled: false,
             lang: langs::DEFAULT,
             strings: &TABLE[0].1,
@@ -524,7 +533,10 @@ impl App {
                     }
                     self.on_done(job, restored);
                 }
-                JobResult::Failed(e) => self.message = Some((self.tf(T::error, &[&e]), true)),
+                JobResult::Failed(e) => {
+                    self.close_after_save = false;
+                    self.message = Some((self.tf(T::error, &[&e]), true));
+                }
             }
             if self.busy.is_none() && !self.pending.is_empty() {
                 self.busy = Some(String::new());
@@ -543,6 +555,10 @@ impl App {
                     m = format!("{} ({})", m, self.t(T::demo_note));
                 }
                 self.message = Some((m, false));
+                if self.close_after_save {
+                    self.allow_close = true;
+                    self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             }
             Some(Job::SetEnabled(enabled)) => {
                 if let Some(be) = self.loaded.as_mut().and_then(|l| l.boot_entry.as_mut()) {
@@ -1055,7 +1071,7 @@ impl App {
                 self.send(Job::Save);
             }
             if ui.add_enabled(self.dirty() && self.busy.is_none(), egui::Button::new(self.t(T::revert))).clicked() {
-                self.send(Job::Load);
+                self.confirm_revert = true;
             }
             ui.separator();
             let idle = self.busy.is_none();
@@ -1075,6 +1091,53 @@ impl App {
                 ui.label(RichText::new(self.t(T::unsaved)).weak());
             }
         });
+    }
+
+    /// Closing the window with unsaved changes asks first.
+    fn quit_guard(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.loaded.is_some() && !self.uninstalled && self.dirty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm_quit = true;
+        }
+        if self.confirm_quit {
+            let busy = self.busy.is_some();
+            egui::Window::new(self.t(T::quit_title)).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.label(self.t(T::unsaved_body));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(self.t(T::cancel)).clicked() {
+                        self.confirm_quit = false;
+                    }
+                    if ui.button(self.t(T::discard_close)).clicked() {
+                        self.confirm_quit = false;
+                        self.allow_close = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.add_enabled(!busy, egui::Button::new(RichText::new(self.t(T::save_close)).strong().color(Color32::WHITE)).fill(Color32::from_rgb(37, 99, 235))).clicked() {
+                        self.confirm_quit = false;
+                        self.close_after_save = true;
+                        self.write_staging_conf();
+                        self.prune_staging();
+                        self.send(Job::Save);
+                    }
+                });
+            });
+        }
+        if self.confirm_revert {
+            egui::Window::new(self.t(T::revert_title)).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.label(self.t(T::revert_body));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(self.t(T::cancel)).clicked() {
+                        self.confirm_revert = false;
+                    }
+                    if ui.add(egui::Button::new(RichText::new(self.t(T::revert)).color(Color32::WHITE)).fill(Color32::from_rgb(185, 28, 28))).clicked() {
+                        self.confirm_revert = false;
+                        self.send(Job::Load);
+                    }
+                });
+            });
+        }
     }
 
     fn uninstall_dialog(&mut self, ctx: &egui::Context) {
@@ -1230,6 +1293,7 @@ impl eframe::App for App {
             }
         });
         self.uninstall_dialog(&ctx);
+        self.quit_guard(&ctx);
         self.track_history(&ctx);
         self.maybe_screenshot(&ctx);
     }
