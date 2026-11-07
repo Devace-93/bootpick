@@ -2,7 +2,7 @@
 
 > **Status: beta.** Tested in QEMU/OVMF and on one real machine so far: an
 > AMD Ryzen 4000 laptop with Insyde UEFI firmware, NVMe + SATA disks, booting
-> Windows, Pop!_OS (systemd-boot) and Ubuntu (shim/GRUB); mouse and touchpad
+> Pop!_OS (systemd-boot) and Ubuntu (shim/GRUB); mouse and touchpad
 > work through the firmware's own pointer drivers. Try it from a USB stick
 > before installing it on an internal disk, keep your existing boot loaders
 > in place (the installer does), and know how to reach your firmware's boot
