@@ -118,22 +118,39 @@ fn grub_stub(cfg: &str) -> Option<(String, String)> {
     Some((host::grub_stub_uuid(cfg)?, host::grub_prefix(cfg)))
 }
 
-/// (visible, timeout) from a generated grub.cfg plus custom.cfg. Assignments
-/// in the `recordfail` branch (shown only after a failed boot) are ignored.
-pub fn grub_state(cfg: &str, custom: Option<&str>) -> (bool, Option<u32>) {
+/// `recordfail=1` in GRUB's environment block: GRUB sets it before every
+/// boot and the system clears it once it has started, so it stays set after a
+/// forced power-off, or when the system cannot reach this grubenv.
+pub fn grubenv_recordfail(env: &str) -> bool {
+    env.lines().any(|l| l.trim() == "recordfail=1")
+}
+
+/// (visible, timeout) from a generated grub.cfg plus custom.cfg, following
+/// the `recordfail` branches the way GRUB will take them. Other `if`s are
+/// treated as taken (both branches), which is close enough for timeouts.
+pub fn grub_state(cfg: &str, custom: Option<&str>, recordfail: bool) -> (bool, Option<u32>) {
     let mut timeout: Option<i64> = None;
     let mut style = String::from("menu");
     let mut scan = |text: &str| {
-        let mut stack: Vec<bool> = Vec::new();
+        // Per open `if`: Some(active) for recordfail tests, None otherwise.
+        let mut stack: Vec<Option<bool>> = Vec::new();
         for line in text.lines() {
             let l = line.trim();
             if l.starts_with("if ") {
-                stack.push(l.contains("recordfail}\" = 1") || l.contains("recordfail}\" = \"1\""));
+                let rf = l.contains("recordfail}");
+                let cond = if !rf {
+                    None
+                } else if l.contains("!= 1") || l.contains("!= \"1\"") {
+                    Some(!recordfail)
+                } else {
+                    Some(recordfail)
+                };
+                stack.push(cond);
                 continue;
             }
             if l.starts_with("else") || l.starts_with("elif") {
-                if let Some(t) = stack.last_mut() {
-                    *t = false;
+                if let Some(Some(t)) = stack.last_mut() {
+                    *t = !*t;
                 }
                 continue;
             }
@@ -141,7 +158,7 @@ pub fn grub_state(cfg: &str, custom: Option<&str>) -> (bool, Option<u32>) {
                 stack.pop();
                 continue;
             }
-            if stack.iter().any(|b| *b) {
+            if stack.iter().any(|b| *b == Some(false)) {
                 continue;
             }
             if let Some(v) = l.strip_prefix("set timeout=") {
@@ -188,7 +205,9 @@ fn strip_block(text: &str) -> String {
 }
 
 fn grub_block() -> String {
-    format!("{}\nif [ \"${{recordfail}}\" != 1 ]; then\n  set timeout_style=hidden\n  set timeout=0\nfi\n{}\n", BEGIN, END)
+    // Unconditional: a stuck `recordfail=1` would otherwise bring the menu
+    // back on every boot. Shift / Esc still open it.
+    format!("{}\nset timeout_style=hidden\nset timeout=0\n{}\n", BEGIN, END)
 }
 
 fn grub_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
@@ -217,7 +236,8 @@ fn grub_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
                 continue;
             };
             let custom = fs::read_to_string(dir.join("custom.cfg")).ok();
-            let (visible, timeout) = grub_state(&cfg, custom.as_deref());
+            let recordfail = fs::read_to_string(dir.join("grubenv")).map(|e| grubenv_recordfail(&e)).unwrap_or(false);
+            let (visible, timeout) = grub_state(&cfg, custom.as_deref(), recordfail);
             let managed = custom.as_deref().map(|c| c.contains(BEGIN)).unwrap_or(false);
             let problem = if sources_custom(&cfg) { None } else { Some(Problem::NoCustomCfg) };
             out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible, timeout, managed, problem });
@@ -445,9 +465,16 @@ fi
 
     #[test]
     fn grub_visibility() {
-        assert_eq!(grub_state(UBUNTU_HEADER, None), (true, Some(10)));
+        assert_eq!(grub_state(UBUNTU_HEADER, None, false), (true, Some(10)));
+        assert_eq!(grub_state(UBUNTU_HEADER, None, true), (true, Some(30)));
+        // An old conditional block does not hide a menu stuck in recordfail.
+        let old = format!("{}\nif [ \"${{recordfail}}\" != 1 ]; then\n  set timeout_style=hidden\n  set timeout=0\nfi\n{}\n", BEGIN, END);
+        assert!(grub_state(UBUNTU_HEADER, Some(&old), true).0);
+        assert!(!grub_state(UBUNTU_HEADER, Some(&old), false).0);
+        assert_eq!(grub_state(UBUNTU_HEADER, Some(&grub_block()), true), (false, Some(0)));
+        assert!(grubenv_recordfail("# GRUB Environment Block\nrecordfail=1\n####"));
         let custom = grub_block();
-        assert_eq!(grub_state(UBUNTU_HEADER, Some(&custom)), (false, Some(0)));
+        assert_eq!(grub_state(UBUNTU_HEADER, Some(&custom), false), (false, Some(0)));
         assert!(sources_custom(UBUNTU_HEADER));
         assert!(!sources_custom("set timeout=5\n"));
     }

@@ -128,7 +128,8 @@ starts it directly. The app lists these menus and offers to hide them:
 
 - GRUB: adds a marked block to `<grub dir>/custom.cfg` (sourced by
   `41_custom`, so it survives `update-grub`) that sets `timeout=0` and
-  `timeout_style=hidden`, except after a failed boot. Hold Shift or press Esc
+  `timeout_style=hidden` (also after a failed boot: GRUB's `recordfail` flag
+  stays set when a system is not booted to the end). Hold Shift or press Esc
   to see the menu anyway.
 - systemd-boot: sets `timeout 0` in `\loader\loader.conf` and keeps the old
   line in a comment. Hold Space to see the menu anyway.
