@@ -5,6 +5,7 @@
 //!   bootpick-config --demo DIR[:LABEL][,DIR2[:LABEL]] [--demo-root UUID=DIR]...
 //!                                      use plain directories as EFI volumes (no root)
 //!   bootpick-config --screenshot OUT.png [--open-theme-editor] [--preview-lang-menu]
+//!                   [--preview-settings] [--preview-all] [--scroll-entries]
 
 mod app;
 mod helper;
@@ -25,6 +26,9 @@ fn main() -> eframe::Result {
     let mut screenshot = None;
     let mut open_theme_editor = false;
     let mut preview_lang_menu = false;
+    let mut preview_settings = false;
+    let mut preview_all = false;
+    let mut scroll_entries = false;
     let mut overrides = host::RootOverride::new();
     let mut demo: Option<String> = None;
     let mut i = 1;
@@ -46,6 +50,9 @@ fn main() -> eframe::Result {
             }
             "--open-theme-editor" => open_theme_editor = true,
             "--preview-lang-menu" => preview_lang_menu = true,
+            "--preview-settings" => preview_settings = true,
+            "--preview-all" => preview_all = true,
+            "--scroll-entries" => scroll_entries = true,
             _ => {}
         }
         i += 1;
@@ -62,13 +69,9 @@ fn main() -> eframe::Result {
         mode = app::Mode::Demo { dirs, overrides };
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1500.0, 920.0])
-            .with_min_inner_size([1100.0, 700.0])
-            .with_title("bootpick settings")
-            .with_app_id("bootpick-settings"),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1500.0, 920.0]).with_min_inner_size([1100.0, 700.0]).with_title("bootpick settings").with_app_id("bootpick-settings"),
         ..Default::default()
     };
-    let opts = app::Opts { mode, screenshot, open_theme_editor, preview_lang_menu };
+    let opts = app::Opts { mode, screenshot, open_theme_editor, preview_lang_menu, preview_settings, preview_all, scroll_entries };
     eframe::run_native("bootpick settings", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, opts).start(&cc.egui_ctx)))))
 }

@@ -70,7 +70,11 @@
   "enabled_msg",
   "disabled_msg",
   "error",
-  "demo_note"
+  "demo_note",
+  "undo",
+  "redo",
+  "show_settings",
+  "show_all"
  ],
  "en": [
   "bootpick settings",
@@ -143,7 +147,11 @@
   "bootpick enabled: it starts first on the next boot",
   "bootpick disabled: the next entry in the firmware boot order starts instead",
   "Error: {0}",
-  "Demo mode: nothing is written to an EFI partition"
+  "Demo mode: nothing is written to an EFI partition",
+  "Undo",
+  "Redo",
+  "Show settings",
+  "Show all entries"
  ],
  "es": [
   "Configuración de bootpick",
@@ -216,7 +224,11 @@
   "bootpick activado: se inicia primero en el próximo arranque",
   "bootpick desactivado: en su lugar se inicia la siguiente entrada del orden de arranque del firmware",
   "Error: {0}",
-  "Modo demo: no se escribe nada en una partición EFI"
+  "Modo demo: no se escribe nada en una partición EFI",
+  "Deshacer",
+  "Rehacer",
+  "Mostrar configuración",
+  "Mostrar todas las entradas"
  ],
  "fr": [
   "Paramètres de bootpick",
@@ -289,7 +301,11 @@
   "bootpick activé : il se lancera en premier au prochain démarrage",
   "bootpick désactivé : l'entrée suivante de l'ordre de démarrage du firmware se lance à la place",
   "Erreur : {0}",
-  "Mode démo : rien n'est écrit sur une partition EFI"
+  "Mode démo : rien n'est écrit sur une partition EFI",
+  "Annuler",
+  "Rétablir",
+  "Afficher les réglages",
+  "Afficher toutes les entrées"
  ],
  "de": [
   "bootpick-Einstellungen",
@@ -362,7 +378,11 @@
   "bootpick aktiviert: startet beim nächsten Systemstart zuerst",
   "bootpick deaktiviert: stattdessen startet der nächste Eintrag der Firmware-Bootreihenfolge",
   "Fehler: {0}",
-  "Demomodus: Es wird nichts auf eine EFI-Partition geschrieben"
+  "Demomodus: Es wird nichts auf eine EFI-Partition geschrieben",
+  "Rückgängig",
+  "Wiederholen",
+  "Einstellungen zeigen",
+  "Alle Einträge zeigen"
  ],
  "it": [
   "Impostazioni di bootpick",
@@ -435,7 +455,11 @@
   "bootpick attivato: si avvia per primo al prossimo avvio",
   "bootpick disattivato: al suo posto si avvia la voce successiva nell'ordine di avvio del firmware",
   "Errore: {0}",
-  "Modalità demo: nulla viene scritto in una partizione EFI"
+  "Modalità demo: nulla viene scritto in una partizione EFI",
+  "Annulla",
+  "Ripeti",
+  "Mostra impostazioni",
+  "Mostra tutte le voci"
  ],
  "pt": [
   "Configurações do bootpick",
@@ -508,7 +532,11 @@
   "bootpick ativado: ele inicia primeiro na próxima inicialização",
   "bootpick desativado: a próxima entrada na ordem de inicialização do firmware será iniciada no lugar dele",
   "Erro: {0}",
-  "Modo de demonstração: nada é gravado em uma partição EFI"
+  "Modo de demonstração: nada é gravado em uma partição EFI",
+  "Desfazer",
+  "Refazer",
+  "Mostrar configurações",
+  "Mostrar todas as entradas"
  ],
  "nl": [
   "bootpick-instellingen",
@@ -581,7 +609,11 @@
   "bootpick ingeschakeld: start als eerste bij de volgende keer opstarten",
   "bootpick uitgeschakeld: in plaats daarvan start het volgende item in de opstartvolgorde van de firmware",
   "Fout: {0}",
-  "Demomodus: er wordt niets naar een EFI-partitie geschreven"
+  "Demomodus: er wordt niets naar een EFI-partitie geschreven",
+  "Ongedaan maken",
+  "Opnieuw",
+  "Instellingen tonen",
+  "Alle items tonen"
  ],
  "sv": [
   "Inställningar för bootpick",
@@ -654,7 +686,11 @@
   "bootpick aktiverat: startar först vid nästa uppstart",
   "bootpick inaktiverat: nästa post i firmwarens startordning startar i stället",
   "Fel: {0}",
-  "Demoläge: inget skrivs till en EFI-partition"
+  "Demoläge: inget skrivs till en EFI-partition",
+  "Ångra",
+  "Gör om",
+  "Visa inställningar",
+  "Visa alla poster"
  ],
  "pl": [
   "Ustawienia bootpick",
@@ -727,7 +763,11 @@
   "bootpick włączony: uruchomi się jako pierwszy przy następnym rozruchu",
   "bootpick wyłączony: zamiast niego uruchomi się następny wpis w kolejności rozruchu oprogramowania układowego",
   "Błąd: {0}",
-  "Tryb demonstracyjny: nic nie jest zapisywane na partycji EFI"
+  "Tryb demonstracyjny: nic nie jest zapisywane na partycji EFI",
+  "Cofnij",
+  "Ponów",
+  "Pokaż ustawienia",
+  "Pokaż wszystkie wpisy"
  ],
  "cs": [
   "Nastavení bootpick",
@@ -800,7 +840,11 @@
   "bootpick zapnut: při příštím spuštění se spustí jako první",
   "bootpick vypnut: místo něj se spustí další položka v pořadí zavádění firmwaru",
   "Chyba: {0}",
-  "Ukázkový režim: na oddíl EFI se nic nezapisuje"
+  "Ukázkový režim: na oddíl EFI se nic nezapisuje",
+  "Zpět",
+  "Znovu",
+  "Zobrazit nastavení",
+  "Zobrazit všechny položky"
  ],
  "ro": [
   "Setări bootpick",
@@ -873,7 +917,11 @@
   "bootpick activat: pornește primul la următoarea pornire",
   "bootpick dezactivat: în locul lui pornește următoarea intrare din ordinea de boot a firmware-ului",
   "Eroare: {0}",
-  "Mod demonstrativ: nu se scrie nimic pe o partiție EFI"
+  "Mod demonstrativ: nu se scrie nimic pe o partiție EFI",
+  "Anulează",
+  "Refă",
+  "Afișează setările",
+  "Afișează toate intrările"
  ],
  "el": [
   "Ρυθμίσεις bootpick",
@@ -946,7 +994,11 @@
   "Το bootpick ενεργοποιήθηκε: ξεκινά πρώτο στην επόμενη εκκίνηση",
   "Το bootpick απενεργοποιήθηκε: στη θέση του ξεκινά η επόμενη καταχώριση στη σειρά εκκίνησης του υλικολογισμικού",
   "Σφάλμα: {0}",
-  "Λειτουργία επίδειξης: τίποτα δεν εγγράφεται σε διαμέρισμα EFI"
+  "Λειτουργία επίδειξης: τίποτα δεν εγγράφεται σε διαμέρισμα EFI",
+  "Αναίρεση",
+  "Επανάληψη",
+  "Εμφάνιση ρυθμίσεων",
+  "Εμφάνιση όλων των καταχωρίσεων"
  ],
  "uk": [
   "Налаштування bootpick",
@@ -1019,7 +1071,11 @@
   "bootpick увімкнено: він запуститься першим під час наступного завантаження",
   "bootpick вимкнено: натомість запуститься наступний запис у порядку завантаження мікропрограми",
   "Помилка: {0}",
-  "Демо-режим: у розділ EFI нічого не записується"
+  "Демо-режим: у розділ EFI нічого не записується",
+  "Скасувати",
+  "Повторити",
+  "Показати налаштування",
+  "Показати всі записи"
  ],
  "ru": [
   "Настройки bootpick",
@@ -1092,7 +1148,11 @@
   "bootpick включён: он запустится первым при следующей загрузке",
   "bootpick отключён: вместо него запустится следующая запись в порядке загрузки прошивки",
   "Ошибка: {0}",
-  "Демо-режим: в раздел EFI ничего не записывается"
+  "Демо-режим: в раздел EFI ничего не записывается",
+  "Отменить",
+  "Повторить",
+  "Показать настройки",
+  "Показать все записи"
  ],
  "tr": [
   "bootpick ayarları",
@@ -1141,7 +1201,7 @@
   "Logo…",
   "Bilgisayarınızdaki bir görüntüyü bu girdinin logosu olarak kullanın",
   "Kaydet",
-  "Geri al",
+  "Değişiklikleri at",
   "Kaydedilmemiş değişiklikler",
   "EFI bölümüne kaydediliyor…",
   "Yeniden yükleniyor…",
@@ -1165,7 +1225,11 @@
   "bootpick etkinleştirildi: bir sonraki açılışta ilk o başlar",
   "bootpick devre dışı bırakıldı: bunun yerine ürün yazılımı önyükleme sırasındaki sonraki girdi başlar",
   "Hata: {0}",
-  "Demo modu: EFI bölümüne hiçbir şey yazılmaz"
+  "Demo modu: EFI bölümüne hiçbir şey yazılmaz",
+  "Geri al",
+  "Yinele",
+  "Ayarları göster",
+  "Tüm girdileri göster"
  ],
  "ar": [
   "إعدادات bootpick",
@@ -1214,7 +1278,7 @@
   "الشعار…",
   "استخدام صورة من حاسوبك شعارًا لهذا الإدخال",
   "حفظ",
-  "تراجع",
+  "تجاهل التغييرات",
   "تغييرات غير محفوظة",
   "جارٍ الحفظ في قسم EFI…",
   "جارٍ إعادة التحميل…",
@@ -1238,7 +1302,11 @@
   "تم تفعيل bootpick: سيبدأ أولًا في الإقلاع التالي",
   "تم تعطيل bootpick: سيبدأ بدلًا منه الإدخال التالي في ترتيب الإقلاع في البرنامج الثابت",
   "خطأ: {0}",
-  "الوضع التجريبي: لا يُكتب أي شيء في قسم EFI"
+  "الوضع التجريبي: لا يُكتب أي شيء في قسم EFI",
+  "تراجع",
+  "إعادة",
+  "إظهار الإعدادات",
+  "إظهار كل الإدخالات"
  ],
  "hi": [
   "bootpick सेटिंग्स",
@@ -1287,7 +1355,7 @@
   "लोगो…",
   "अपने कंप्यूटर की किसी छवि को इस एंट्री के लोगो के रूप में उपयोग करें",
   "सहेजें",
-  "पूर्ववत करें",
+  "बदलाव छोड़ें",
   "बिना सहेजे बदलाव",
   "EFI विभाजन में सहेजा जा रहा है…",
   "फिर से लोड हो रहा है…",
@@ -1311,7 +1379,11 @@
   "bootpick सक्षम: अगले बूट पर यह सबसे पहले शुरू होगा",
   "bootpick अक्षम: इसके बजाय फ़र्मवेयर बूट क्रम की अगली एंट्री शुरू होगी",
   "त्रुटि: {0}",
-  "डेमो मोड: किसी EFI विभाजन में कुछ नहीं लिखा जाता"
+  "डेमो मोड: किसी EFI विभाजन में कुछ नहीं लिखा जाता",
+  "पूर्ववत करें",
+  "फिर से करें",
+  "सेटिंग्स दिखाएँ",
+  "सभी एंट्री दिखाएँ"
  ],
  "zh": [
   "bootpick 设置",
@@ -1384,7 +1456,11 @@
   "bootpick 已启用：下次启动时将首先启动",
   "bootpick 已禁用：将改为启动固件启动顺序中的下一个启动项",
   "错误：{0}",
-  "演示模式：不会向 EFI 分区写入任何内容"
+  "演示模式：不会向 EFI 分区写入任何内容",
+  "撤销",
+  "重做",
+  "显示设置",
+  "显示所有启动项"
  ],
  "ja": [
   "bootpick 設定",
@@ -1433,7 +1509,7 @@
   "ロゴ…",
   "コンピューター上の画像をこのエントリのロゴとして使用",
   "保存",
-  "元に戻す",
+  "変更を破棄",
   "未保存の変更",
   "EFI パーティションに保存中…",
   "再読み込み中…",
@@ -1457,7 +1533,11 @@
   "bootpick を有効にしました: 次回の起動時に最初に起動します",
   "bootpick を無効にしました: 代わりにファームウェアのブート順序で次のエントリが起動します",
   "エラー: {0}",
-  "デモモード: EFI パーティションには何も書き込まれません"
+  "デモモード: EFI パーティションには何も書き込まれません",
+  "元に戻す",
+  "やり直す",
+  "設定を表示",
+  "すべてのエントリを表示"
  ],
  "ko": [
   "bootpick 설정",
@@ -1530,7 +1610,11 @@
   "bootpick 활성화됨: 다음 부팅 시 가장 먼저 시작됩니다",
   "bootpick 비활성화됨: 대신 펌웨어 부트 순서의 다음 항목이 시작됩니다",
   "오류: {0}",
-  "데모 모드: EFI 파티션에 아무것도 기록하지 않습니다"
+  "데모 모드: EFI 파티션에 아무것도 기록하지 않습니다",
+  "실행 취소",
+  "다시 실행",
+  "설정 표시",
+  "모든 항목 표시"
  ],
  "vi": [
   "Cài đặt bootpick",
@@ -1579,7 +1663,7 @@
   "Logo…",
   "Dùng một ảnh từ máy tính làm logo cho mục này",
   "Lưu",
-  "Hoàn tác",
+  "Hủy thay đổi",
   "Thay đổi chưa lưu",
   "Đang lưu vào phân vùng EFI…",
   "Đang tải lại…",
@@ -1603,7 +1687,11 @@
   "Đã bật bootpick: bootpick sẽ chạy đầu tiên ở lần khởi động tiếp theo",
   "Đã tắt bootpick: mục tiếp theo trong thứ tự khởi động của firmware sẽ chạy thay thế",
   "Lỗi: {0}",
-  "Chế độ demo: không ghi gì vào phân vùng EFI"
+  "Chế độ demo: không ghi gì vào phân vùng EFI",
+  "Hoàn tác",
+  "Làm lại",
+  "Hiện cài đặt",
+  "Hiện mọi mục"
  ],
  "id": [
   "Pengaturan bootpick",
@@ -1676,7 +1764,11 @@
   "bootpick aktif: akan berjalan pertama pada boot berikutnya",
   "bootpick nonaktif: entri berikutnya dalam urutan boot firmware akan berjalan sebagai gantinya",
   "Galat: {0}",
-  "Mode demo: tidak ada yang ditulis ke partisi EFI"
+  "Mode demo: tidak ada yang ditulis ke partisi EFI",
+  "Urungkan",
+  "Ulangi",
+  "Tampilkan pengaturan",
+  "Tampilkan semua entri"
  ],
  "th": [
   "การตั้งค่า bootpick",
@@ -1749,6 +1841,10 @@
   "เปิดใช้งาน bootpick แล้ว: จะเริ่มเป็นอันดับแรกในการบูตครั้งถัดไป",
   "ปิดใช้งาน bootpick แล้ว: รายการถัดไปในลำดับการบูตของเฟิร์มแวร์จะเริ่มแทน",
   "ข้อผิดพลาด: {0}",
-  "โหมดสาธิต: จะไม่มีการเขียนสิ่งใดลงพาร์ทิชัน EFI"
+  "โหมดสาธิต: จะไม่มีการเขียนสิ่งใดลงพาร์ทิชัน EFI",
+  "เลิกทำ",
+  "ทำซ้ำ",
+  "แสดงการตั้งค่า",
+  "แสดงรายการทั้งหมด"
  ]
 }

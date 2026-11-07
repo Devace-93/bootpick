@@ -34,6 +34,9 @@ pub struct Opts {
     pub screenshot: Option<PathBuf>,
     pub open_theme_editor: bool,
     pub preview_lang_menu: bool,
+    pub preview_settings: bool,
+    pub preview_all: bool,
+    pub scroll_entries: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -60,13 +63,7 @@ struct HelperProc {
 impl HelperProc {
     fn spawn() -> Result<HelperProc, String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut child = Command::new("pkexec")
-            .arg(exe)
-            .arg("--helper")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("could not start pkexec: {}", e))?;
+        let mut child = Command::new("pkexec").arg(exe).arg("--helper").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().map_err(|e| format!("could not start pkexec: {}", e))?;
         let stdin = child.stdin.take().ok_or("no helper stdin")?;
         let stdout = BufReader::new(child.stdout.take().ok_or("no helper stdout")?);
         Ok(HelperProc { child, stdin, stdout })
@@ -195,11 +192,20 @@ pub struct App {
     scan: Scan,
     cfg: Config,
     saved_text: String,
-    files_changed: bool,
+    /// Background files currently offered (removals take effect on save).
+    bgs: Vec<String>,
+    saved_bgs: Vec<String>,
+    undo: Vec<Snap>,
+    redo: Vec<Snap>,
+    /// Last committed state; edits in progress are compared against it.
+    committed: Snap,
     message: Option<(String, bool)>,
     preview: Option<TextureHandle>,
     preview_dirty: bool,
     show_lang_menu: bool,
+    show_settings: bool,
+    show_all: bool,
+    scroll_entries: bool,
     textures: HashMap<String, Option<TextureHandle>>,
     text: Option<TextEngine>,
     confirm_uninstall: bool,
@@ -218,10 +224,7 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, opts: Opts) -> App {
-        let staging = std::env::var("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir())
-            .join(format!("bootpick-staging-{}", std::process::id()));
+        let staging = std::env::var("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir()).join(format!("bootpick-staging-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&staging);
         let demo = matches!(opts.mode, Mode::Demo { .. });
         let (jtx, jrx) = channel();
@@ -243,11 +246,18 @@ impl App {
             scan: Scan::default(),
             cfg: Config::default(),
             saved_text: String::new(),
-            files_changed: false,
+            bgs: Vec::new(),
+            saved_bgs: Vec::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            committed: Snap::default(),
             message: None,
             preview: None,
             preview_dirty: false,
             show_lang_menu: opts.preview_lang_menu,
+            show_settings: opts.preview_settings,
+            show_all: opts.preview_all,
+            scroll_entries: opts.scroll_entries,
             textures: HashMap::new(),
             text: None,
             confirm_uninstall: false,
@@ -342,7 +352,72 @@ impl App {
     }
 
     fn dirty(&self) -> bool {
-        self.files_changed || self.cfg.serialize() != self.saved_text
+        self.bgs != self.saved_bgs || self.cfg.serialize() != self.saved_text
+    }
+
+    fn snap(&self) -> Snap {
+        Snap { conf: self.cfg.serialize(), bgs: self.bgs.clone() }
+    }
+
+    /// Records a history step once an edit settles: no button held and no
+    /// text field focused (typing a name is one step, not one per letter).
+    fn track_history(&mut self, ctx: &egui::Context) {
+        if self.loaded.is_none() || ctx.input(|i| i.pointer.any_down()) || ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        let now = self.snap();
+        if now != self.committed {
+            let prev = std::mem::replace(&mut self.committed, now);
+            self.undo.push(prev);
+            self.redo.clear();
+        }
+    }
+
+    fn restore(&mut self, s: Snap) {
+        let mut cfg = Config::parse(&s.conf);
+        // Keep the preference list explicit, as after loading.
+        if cfg.entries.is_empty() {
+            cfg.entries = self.cfg.entries.clone();
+        }
+        self.cfg = cfg;
+        self.bgs = s.bgs.clone();
+        self.committed = s;
+        self.textures.clear();
+        self.preview_dirty = true;
+    }
+
+    fn do_undo(&mut self) {
+        self.track_history(&self.ctx.clone());
+        if let Some(s) = self.undo.pop() {
+            let cur = self.snap();
+            self.redo.push(cur);
+            self.restore(s);
+        }
+    }
+
+    fn do_redo(&mut self) {
+        if let Some(s) = self.redo.pop() {
+            let cur = self.snap();
+            self.undo.push(cur);
+            self.restore(s);
+        }
+    }
+
+    /// Before saving: drop removed backgrounds and custom logos nothing uses,
+    /// so the helper deletes them from the EFI partition too.
+    fn prune_staging(&self) {
+        let mut st = self.storage();
+        for (n, dir) in st.list_dir(bootpick_core::paths::BACKGROUNDS) {
+            if !dir && n.to_ascii_lowercase().ends_with(".bmp") && !self.bgs.iter().any(|b| b.eq_ignore_ascii_case(&n)) {
+                let _ = std::fs::remove_file(st.resolve(&format!("{}\\{}", bootpick_core::paths::BACKGROUNDS, n)));
+            }
+        }
+        for (n, dir) in st.list_dir(bootpick_core::paths::ICONS) {
+            let stem = n.trim_end_matches(".bmp").trim_end_matches(".BMP");
+            if !dir && stem.starts_with("custom-") && !self.cfg.entries.iter().any(|e| e.icon == stem) {
+                let _ = std::fs::remove_file(st.resolve(&format!("{}\\{}", bootpick_core::paths::ICONS, n)));
+            }
+        }
     }
 
     fn on_loaded(&mut self, reply: LoadReply) {
@@ -400,8 +475,18 @@ impl App {
         self.text = Some(engine);
         self.textures.clear();
         self.loaded = Some(reply);
+        self.bgs = self.list_bgs();
+        self.saved_bgs = self.bgs.clone();
+        self.undo.clear();
+        self.redo.clear();
+        self.committed = self.snap();
         self.preview_dirty = true;
-        self.files_changed = false;
+    }
+
+    fn list_bgs(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.storage().list_dir(bootpick_core::paths::BACKGROUNDS).into_iter().filter(|(n, d)| !d && n.to_ascii_lowercase().ends_with(".bmp")).map(|(n, _)| n).collect();
+        v.sort();
+        v
     }
 
     fn poll_jobs(&mut self) {
@@ -413,7 +498,7 @@ impl App {
                 JobResult::Done(_) => match job {
                     Some(Job::Save) => {
                         self.saved_text = self.cfg.serialize();
-                        self.files_changed = false;
+                        self.saved_bgs = self.bgs.clone();
                         let mut m = self.t(T::saved_ok).to_string();
                         if self.demo {
                             m = format!("{} ({})", m, self.t(T::demo_note));
@@ -454,6 +539,7 @@ impl App {
         self.write_staging_conf();
         let opts = MenuOptions { width: 1920, height: 1080, status: None, has_pointer: true, platform_lang: String::new(), preview: true };
         let mut menu = Menu::new(self.scan.clone(), Box::new(self.storage()), opts);
+        menu.set_preview_view(self.show_settings, self.show_all);
         menu.set_lang_menu_open(self.show_lang_menu);
         menu.draw();
         let img = egui::ColorImage::from_rgba_unmultiplied([1920, 1080], &canvas_rgba(menu.scene()));
@@ -470,9 +556,11 @@ impl App {
             return t.clone();
         }
         let file = if name.to_ascii_lowercase().ends_with(".bmp") { name.to_string() } else { format!("{}.bmp", name) };
-        let tex = self.storage().read(&format!("{}\\{}", dir, file)).and_then(|d| imaging::decode_bmp_rgba(&d, max, max)).map(|(w, h, rgba)| {
-            ctx.load_texture(&key, egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba), TextureOptions::LINEAR)
-        });
+        let tex = self
+            .storage()
+            .read(&format!("{}\\{}", dir, file))
+            .and_then(|d| imaging::decode_bmp_rgba(&d, max, max))
+            .map(|(w, h, rgba)| ctx.load_texture(&key, egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba), TextureOptions::LINEAR));
         self.textures.insert(key, tex.clone());
         tex
     }
@@ -666,7 +754,7 @@ impl App {
         ui.heading(self.t(T::background));
         ui.add_space(4.0);
         let mut names: Vec<String> = vec![String::new()];
-        names.extend(self.storage().list_dir(bootpick_core::paths::BACKGROUNDS).into_iter().filter(|(n, d)| !d && n.to_ascii_lowercase().ends_with(".bmp")).map(|(n, _)| n));
+        names.extend(self.bgs.iter().cloned());
         let thumb = Vec2::new(128.0, 72.0);
         ui.horizontal_wrapped(|ui| {
             for n in &names {
@@ -716,8 +804,8 @@ impl App {
                                 i += 1;
                             }
                             let _ = st.write(&format!("{}\\{}", bootpick_core::paths::BACKGROUNDS, name), &bytes);
+                            self.bgs.push(name.clone());
                             self.cfg.background = name;
-                            self.files_changed = true;
                             self.preview_dirty = true;
                         }
                         Err(e) => self.message = Some((e, true)),
@@ -725,11 +813,9 @@ impl App {
                 }
             }
             if !self.cfg.background.is_empty() && ui.button(self.t(T::remove_selected)).clicked() {
-                let p = self.storage().resolve(&format!("{}\\{}", bootpick_core::paths::BACKGROUNDS, self.cfg.background));
-                let _ = std::fs::remove_file(p);
+                let cur = self.cfg.background.clone();
+                self.bgs.retain(|b| !b.eq_ignore_ascii_case(&cur));
                 self.cfg.background.clear();
-                self.textures.retain(|k, _| !k.contains("backgrounds"));
-                self.files_changed = true;
                 self.preview_dirty = true;
             }
         });
@@ -745,7 +831,9 @@ impl App {
         let mut swap: Option<(usize, usize)> = None;
         for i in 0..n {
             let id = self.cfg.entries[i].id.clone();
-            let Some(entry) = self.scan.entries.iter().find(|e| e.id == id).cloned() else { continue };
+            let Some(entry) = self.scan.entries.iter().find(|e| e.id == id).cloned() else {
+                continue;
+            };
             let icon_name = if self.cfg.entries[i].icon.is_empty() { entry.icon.clone() } else { self.cfg.entries[i].icon.clone() };
             let logo = self.bmp_texture(&ctx, bootpick_core::paths::ICONS, &icon_name, 64);
             egui::Frame::group(ui.style()).inner_margin(8.0).show(ui, |ui| {
@@ -775,31 +863,41 @@ impl App {
                         }
                         ui.label(RichText::new(detail).small().weak());
                     });
+                });
+                // Actions on their own row so long names never collide with them.
+                ui.horizontal(|ui| {
+                    ui.add_space(70.0);
+                    if ui.button(self.t(T::logo_btn)).on_hover_text(self.t(T::logo_hint)).clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter(self.t(T::images), &["png", "jpg", "jpeg", "webp", "bmp", "svg"]).pick_file() {
+                            match imaging::import_logo(&path) {
+                                Ok(bytes) => {
+                                    // A new name per import, so undo can return to the previous logo.
+                                    let mut st = self.storage();
+                                    let base = format!("custom-{}", imaging::slug(&path));
+                                    let mut name = base.clone();
+                                    let mut k = 2;
+                                    while st.exists(&format!("{}\\{}.bmp", bootpick_core::paths::ICONS, name)) {
+                                        name = format!("{}-{}", base, k);
+                                        k += 1;
+                                    }
+                                    let _ = st.write(&format!("{}\\{}.bmp", bootpick_core::paths::ICONS, name), &bytes);
+                                    self.cfg.entries[i].icon = name;
+                                    self.preview_dirty = true;
+                                }
+                                Err(e) => self.message = Some((e, true)),
+                            }
+                        }
+                    }
+                    if !self.cfg.entries[i].icon.is_empty() && ui.button(self.t(T::reset_logo)).clicked() {
+                        self.cfg.entries[i].icon.clear();
+                        self.preview_dirty = true;
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add_enabled(i + 1 < n, egui::Button::new("⬇")).on_hover_text(self.t(T::move_down)).clicked() {
                             swap = Some((i, i + 1));
                         }
                         if ui.add_enabled(i > 0, egui::Button::new("⬆")).on_hover_text(self.t(T::move_up)).clicked() {
                             swap = Some((i, i - 1));
-                        }
-                        if !self.cfg.entries[i].icon.is_empty() && ui.button(self.t(T::reset_logo)).clicked() {
-                            self.cfg.entries[i].icon.clear();
-                            self.preview_dirty = true;
-                        }
-                        if ui.button(self.t(T::logo_btn)).on_hover_text(self.t(T::logo_hint)).clicked() {
-                            if let Some(path) = rfd::FileDialog::new().add_filter(self.t(T::images), &["png", "jpg", "jpeg", "webp", "bmp", "svg"]).pick_file() {
-                                match imaging::import_logo(&path) {
-                                    Ok(bytes) => {
-                                        let name = format!("custom-{}", imaging::slug(&path));
-                                        let _ = self.storage().write(&format!("{}\\{}.bmp", bootpick_core::paths::ICONS, name), &bytes);
-                                        self.textures.retain(|k, _| !k.contains(&name));
-                                        self.cfg.entries[i].icon = name;
-                                        self.files_changed = true;
-                                        self.preview_dirty = true;
-                                    }
-                                    Err(e) => self.message = Some((e, true)),
-                                }
-                            }
                         }
                     });
                 });
@@ -827,11 +925,7 @@ impl App {
                 }
                 let enabled = self.loaded.as_ref().and_then(|l| l.boot_entry).map(|b| b.1).unwrap_or(false);
                 let label = if enabled { self.t(T::disable_btn) } else { self.t(T::enable_btn) };
-                if ui
-                    .add_enabled(!busy, egui::Button::new(label))
-                    .on_hover_text(self.t(T::disable_hint))
-                    .clicked()
-                {
+                if ui.add_enabled(!busy, egui::Button::new(label)).on_hover_text(self.t(T::disable_hint)).clicked() {
                     self.send(Job::SetEnabled(!enabled));
                 }
             });
@@ -844,11 +938,21 @@ impl App {
             let save = egui::Button::new(RichText::new(format!("  {}  ", self.t(T::save))).strong()).fill(if can_save { Color32::from_rgb(37, 99, 235) } else { Color32::TRANSPARENT });
             if ui.add_enabled(can_save, save).clicked() {
                 self.write_staging_conf();
+                self.prune_staging();
                 self.send(Job::Save);
             }
             if ui.add_enabled(self.dirty() && self.busy.is_none(), egui::Button::new(self.t(T::revert))).clicked() {
                 self.send(Job::Load);
             }
+            ui.separator();
+            let idle = self.busy.is_none();
+            if ui.add_enabled(idle && !self.undo.is_empty(), egui::Button::new(format!("↶ {}", self.t(T::undo)))).on_hover_text("Ctrl+Z").clicked() {
+                self.do_undo();
+            }
+            if ui.add_enabled(idle && !self.redo.is_empty(), egui::Button::new(format!("↷ {}", self.t(T::redo)))).on_hover_text("Ctrl+Shift+Z / Ctrl+Y").clicked() {
+                self.do_redo();
+            }
+            ui.separator();
             if let Some(b) = &self.busy {
                 ui.spinner();
                 ui.label(b.as_str());
@@ -881,7 +985,9 @@ impl App {
     }
 
     fn maybe_screenshot(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.opts_screenshot.clone() else { return };
+        let Some(path) = self.opts_screenshot.clone() else {
+            return;
+        };
         if self.shot_done.load(Ordering::SeqCst) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
@@ -912,6 +1018,18 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_jobs();
+        if self.busy.is_none() && ctx.memory(|m| m.focused().is_none()) {
+            let (undo, redo) = ctx.input_mut(|i| {
+                let redo = i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z) || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
+                let undo = i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z);
+                (undo, redo)
+            });
+            if undo {
+                self.do_undo();
+            } else if redo {
+                self.do_redo();
+            }
+        }
         if self.uninstalled {
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.vertical_centered(|ui| {
@@ -961,6 +1079,9 @@ impl eframe::App for App {
                 ui.separator();
                 self.section_entries(ui);
                 ui.add_space(12.0);
+                if self.scroll_entries {
+                    ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                }
             });
         });
         self.render_preview(&ctx);
@@ -968,12 +1089,18 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.heading(self.t(T::preview));
                 ui.label(RichText::new(self.t(T::preview_hint)).weak());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = self.t(T::show_lang_picker);
-                    if ui.checkbox(&mut self.show_lang_menu, label).changed() {
-                        self.preview_dirty = true;
-                    }
-                });
+            });
+            ui.horizontal_wrapped(|ui| {
+                let (l1, l2, l3) = (self.t(T::show_lang_picker), self.t(T::show_settings), self.t(T::show_all));
+                if ui.checkbox(&mut self.show_all, l3).changed() {
+                    self.preview_dirty = true;
+                }
+                if ui.checkbox(&mut self.show_settings, l2).changed() {
+                    self.preview_dirty = true;
+                }
+                if ui.checkbox(&mut self.show_lang_menu, l1).changed() {
+                    self.preview_dirty = true;
+                }
             });
             ui.add_space(6.0);
             if let Some(t) = &self.preview {
@@ -984,8 +1111,15 @@ impl eframe::App for App {
             }
         });
         self.uninstall_dialog(&ctx);
+        self.track_history(&ctx);
         self.maybe_screenshot(&ctx);
     }
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct Snap {
+    conf: String,
+    bgs: Vec<String>,
 }
 
 impl Drop for App {
@@ -1050,7 +1184,18 @@ fn bidi_visual(s: &str) -> String {
     let is_r = |c: char| matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF) && c.is_alphabetic();
     let chars: Vec<char> = s.chars().collect();
     let is_marker = |c: char| (0xE000..0xE010).contains(&(c as u32));
-    let cls: Vec<D> = chars.iter().map(|&c| if is_r(c) { D::R } else if c.is_alphanumeric() || is_marker(c) { D::L } else { D::N }).collect();
+    let cls: Vec<D> = chars
+        .iter()
+        .map(|&c| {
+            if is_r(c) {
+                D::R
+            } else if c.is_alphanumeric() || is_marker(c) {
+                D::L
+            } else {
+                D::N
+            }
+        })
+        .collect();
     let para = cls.iter().copied().find(|d| *d != D::N).unwrap_or(D::L);
     if para != D::R {
         return s.to_string();

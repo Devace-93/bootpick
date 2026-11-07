@@ -266,6 +266,14 @@ impl Menu {
         self.has_pointer = v;
     }
 
+    /// Desktop preview: show hidden entries and/or the settings screen.
+    pub fn set_preview_view(&mut self, settings: bool, reveal: bool) {
+        self.reveal = reveal;
+        if settings {
+            self.open_settings();
+        }
+    }
+
     /// Shows the language picker open (used by the desktop preview).
     pub fn set_lang_menu_open(&mut self, open: bool) {
         self.lang_open = open;
