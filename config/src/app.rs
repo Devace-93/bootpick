@@ -4,6 +4,7 @@
 
 use crate::host::{self, DirStorage, RootOverride};
 use crate::i18n_app::{T, TABLE};
+use crate::menus::{self, LoaderMenu, MenuKind, Problem};
 use crate::imaging;
 use crate::proto::{LoadReply, Reply, Request, ScanJ};
 use bootpick_core::config::{builtin_themes, normalize_timeout, Config, EntryPref, Theme, THEME_FIELDS};
@@ -39,18 +40,20 @@ pub struct Opts {
     pub scroll_entries: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 enum Job {
     Load,
     Save,
     SetEnabled(bool),
     Uninstall,
+    /// Hide (false) or restore (true) another boot loader's menu.
+    SetMenu(String, bool),
 }
 
 enum JobResult {
     Loaded(Box<LoadReply>),
-    #[allow(dead_code)]
-    Done(String),
+    /// Success; the boot menus as they are now, when the job may change them.
+    Done(Option<Vec<LoaderMenu>>),
     Failed(String),
 }
 
@@ -114,20 +117,33 @@ fn worker(mode: Mode, staging: PathBuf, rx: Receiver<Job>, tx: Sender<JobResult>
                     let _ = std::fs::remove_dir_all(&dst);
                     copy_dir(&src, &dst);
                     let hs = host::scan_dirs(dirs, overrides);
+                    let menus = menus::scan(&menus::Env::Demo { dirs, overrides });
                     JobResult::Loaded(Box::new(LoadReply {
                         esp_device: dirs[0].2.display().to_string(),
                         esp_label: dirs[0].1.clone(),
                         scan: ScanJ::from(&hs.scan),
                         detections: hs.detections,
                         boot_entry: Some((6, demo_enabled, demo_enabled)),
+                        menus,
                     }))
                 }
-                Job::Save => JobResult::Done("Saved (demo mode: nothing was written to an EFI partition)".into()),
+                Job::Save => JobResult::Done(None),
                 Job::SetEnabled(e) => {
                     demo_enabled = e;
-                    JobResult::Done(if e { "bootpick enabled (demo)".into() } else { "bootpick disabled (demo)".into() })
+                    let env = menus::Env::Demo { dirs, overrides };
+                    if !e {
+                        menus::restore_all(&env);
+                    }
+                    JobResult::Done(Some(menus::scan(&env)))
                 }
-                Job::Uninstall => JobResult::Done("Uninstall is not available in demo mode".into()),
+                Job::Uninstall => JobResult::Done(None),
+                Job::SetMenu(id, visible) => {
+                    let env = menus::Env::Demo { dirs, overrides };
+                    match menus::set(&env, &id, visible) {
+                        Ok(()) => JobResult::Done(Some(menus::scan(&env))),
+                        Err(e) => JobResult::Failed(e),
+                    }
+                }
             },
             Mode::Real => {
                 if helper.is_none() {
@@ -147,10 +163,11 @@ fn worker(mode: Mode, staging: PathBuf, rx: Receiver<Job>, tx: Sender<JobResult>
                     Job::Save => Request::Save { staging: staging_s },
                     Job::SetEnabled(enabled) => Request::SetEnabled { enabled },
                     Job::Uninstall => Request::Uninstall,
+                    Job::SetMenu(id, visible) => Request::SetMenu { id, visible },
                 };
                 match h.call(&req) {
                     Ok(Reply::Ok { load: Some(l), .. }) => JobResult::Loaded(Box::new(l)),
-                    Ok(Reply::Ok { message, .. }) => JobResult::Done(message),
+                    Ok(Reply::Ok { menus, .. }) => JobResult::Done(menus),
                     Ok(Reply::Error { message }) => JobResult::Failed(message),
                     Err(e) => {
                         helper = None;
@@ -330,16 +347,18 @@ impl App {
 
     fn send(&mut self, job: Job) {
         self.busy = Some(
-            match job {
+            match &job {
                 Job::Load => self.t(T::waiting_auth),
                 Job::Save => self.t(T::saving),
                 Job::SetEnabled(true) => self.t(T::enabling),
                 Job::SetEnabled(false) => self.t(T::disabling),
                 Job::Uninstall => self.t(T::uninstalling),
+                Job::SetMenu(_, false) => self.t(T::hiding_menu),
+                Job::SetMenu(_, true) => self.t(T::showing_menu),
             }
             .to_string(),
         );
-        self.pending.push(job);
+        self.pending.push(job.clone());
         let _ = self.jobs.send(job);
     }
 
@@ -495,31 +514,49 @@ impl App {
             let job = if self.pending.is_empty() { None } else { Some(self.pending.remove(0)) };
             match r {
                 JobResult::Loaded(l) => self.on_loaded(*l),
-                JobResult::Done(_) => match job {
-                    Some(Job::Save) => {
-                        self.saved_text = self.cfg.serialize();
-                        self.saved_bgs = self.bgs.clone();
-                        let mut m = self.t(T::saved_ok).to_string();
-                        if self.demo {
-                            m = format!("{} ({})", m, self.t(T::demo_note));
-                        }
-                        self.message = Some((m, false));
+                JobResult::Done(menus) => {
+                    let restored = match (&menus, self.loaded.as_ref()) {
+                        (Some(new), Some(l)) => l.menus.iter().filter(|m| m.managed).count() > new.iter().filter(|m| m.managed).count(),
+                        _ => false,
+                    };
+                    if let (Some(new), Some(l)) = (menus, self.loaded.as_mut()) {
+                        l.menus = new;
                     }
-                    Some(Job::SetEnabled(enabled)) => {
-                        if let Some(be) = self.loaded.as_mut().and_then(|l| l.boot_entry.as_mut()) {
-                            be.1 = enabled;
-                            be.2 = enabled;
-                        }
-                        self.message = Some((self.t(if enabled { T::enabled_msg } else { T::disabled_msg }).to_string(), false));
-                    }
-                    Some(Job::Uninstall) => self.uninstalled = !self.demo,
-                    _ => {}
-                },
+                    self.on_done(job, restored);
+                }
                 JobResult::Failed(e) => self.message = Some((self.tf(T::error, &[&e]), true)),
             }
             if self.busy.is_none() && !self.pending.is_empty() {
                 self.busy = Some(String::new());
             }
+        }
+    }
+
+    fn on_done(&mut self, job: Option<Job>, restored: bool) {
+        let note = if restored { format!(" {}", self.t(T::menus_restore_note)) } else { String::new() };
+        match job {
+            Some(Job::Save) => {
+                self.saved_text = self.cfg.serialize();
+                self.saved_bgs = self.bgs.clone();
+                let mut m = self.t(T::saved_ok).to_string();
+                if self.demo {
+                    m = format!("{} ({})", m, self.t(T::demo_note));
+                }
+                self.message = Some((m, false));
+            }
+            Some(Job::SetEnabled(enabled)) => {
+                if let Some(be) = self.loaded.as_mut().and_then(|l| l.boot_entry.as_mut()) {
+                    be.1 = enabled;
+                    be.2 = enabled;
+                }
+                self.message = Some((format!("{}{}", self.t(if enabled { T::enabled_msg } else { T::disabled_msg }), note), false));
+            }
+            Some(Job::SetMenu(id, visible)) => {
+                let name = self.loaded.as_ref().and_then(|l| l.menus.iter().find(|m| m.id == id)).map(|m| m.name.clone()).unwrap_or_default();
+                self.message = Some((self.tf(if visible { T::menu_shown_ok } else { T::menu_hidden_ok }, &[&name]), false));
+            }
+            Some(Job::Uninstall) => self.uninstalled = !self.demo,
+            _ => {}
         }
     }
 
@@ -909,6 +946,85 @@ impl App {
         }
     }
 
+    fn any_managed(&self) -> bool {
+        self.loaded.as_ref().map(|l| l.menus.iter().any(|m| m.managed)).unwrap_or(false)
+    }
+
+    fn menu_title(&self, m: &LoaderMenu) -> String {
+        self.tf(if m.kind == MenuKind::Grub { T::menu_grub } else { T::menu_sdboot }, &[&m.name])
+    }
+
+    /// Callout at the top: menus that still appear after bootpick.
+    fn menus_offer(&mut self, ui: &mut egui::Ui) {
+        let Some(l) = &self.loaded else { return };
+        let hideable: Vec<LoaderMenu> = l.menus.iter().filter(|m| m.can_hide()).cloned().collect();
+        if hideable.is_empty() {
+            return;
+        }
+        let names = hideable.iter().map(|m| self.menu_title(m)).collect::<Vec<_>>().join(", ");
+        let text = self.tf(T::menus_offer, &[&names]);
+        egui::Frame::new().fill(Color32::from_rgb(66, 52, 18)).stroke(egui::Stroke::new(1.0, Color32::from_rgb(202, 138, 4))).corner_radius(6.0).inner_margin(10.0).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(text).color(Color32::from_rgb(253, 230, 138)));
+                if ui.add_enabled(self.busy.is_none(), egui::Button::new(RichText::new(self.t(T::hide_all)).strong())).clicked() {
+                    for m in hideable {
+                        self.send(Job::SetMenu(m.id, false));
+                    }
+                }
+            });
+        });
+        ui.add_space(6.0);
+    }
+
+    fn section_menus(&mut self, ui: &mut egui::Ui) {
+        ui.heading(self.t(T::menus_title));
+        ui.label(RichText::new(self.t(T::menus_hint)).weak());
+        ui.add_space(4.0);
+        let menus = self.loaded.as_ref().map(|l| l.menus.clone()).unwrap_or_default();
+        if menus.is_empty() {
+            ui.label(RichText::new(self.t(T::menus_none)).italics());
+            return;
+        }
+        let idle = self.busy.is_none();
+        for m in menus {
+            egui::Frame::group(ui.style()).inner_margin(8.0).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(self.menu_title(&m)).strong());
+                        let status = if let Some(p) = &m.problem {
+                            RichText::new(self.t(if *p == Problem::Unreadable { T::menu_unreadable } else { T::menu_no_custom })).color(Color32::from_rgb(248, 113, 113))
+                        } else if m.visible {
+                            let t = match m.timeout {
+                                Some(n) => self.tf(T::menu_shown_for, &[&n.to_string()]),
+                                None => self.t(T::menu_shown_wait).to_string(),
+                            };
+                            RichText::new(format!("● {}", t)).color(Color32::from_rgb(250, 204, 21))
+                        } else if m.managed {
+                            RichText::new(format!("● {}", self.t(T::menu_hidden_by_us))).color(Color32::from_rgb(74, 222, 128))
+                        } else {
+                            RichText::new(format!("● {}", self.t(T::menu_hidden))).weak()
+                        };
+                        ui.label(status.small());
+                        ui.label(RichText::new(m.location.clone()).small().weak());
+                        if m.kind == MenuKind::SystemdBoot {
+                            ui.label(RichText::new(self.tf(T::menu_sd_note, &[&m.name])).small().weak());
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    if m.can_hide() && ui.add_enabled(idle, egui::Button::new(self.t(T::hide_menu))).clicked() {
+                        self.send(Job::SetMenu(m.id.clone(), false));
+                    }
+                    if m.managed && ui.add_enabled(idle, egui::Button::new(self.t(T::show_menu))).clicked() {
+                        self.send(Job::SetMenu(m.id.clone(), true));
+                    }
+                });
+            });
+        }
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(RichText::new(self.t(T::title)).strong());
@@ -925,7 +1041,7 @@ impl App {
                 }
                 let enabled = self.loaded.as_ref().and_then(|l| l.boot_entry).map(|b| b.1).unwrap_or(false);
                 let label = if enabled { self.t(T::disable_btn) } else { self.t(T::enable_btn) };
-                if ui.add_enabled(!busy, egui::Button::new(label)).on_hover_text(self.t(T::disable_hint)).clicked() {
+                if ui.add_enabled(!busy, egui::Button::new(label)).on_hover_text(if self.any_managed() { format!("{} {}", self.t(T::disable_hint), self.t(T::menus_restore_note)) } else { self.t(T::disable_hint).to_string() }).clicked() {
                     self.send(Job::SetEnabled(!enabled));
                 }
             });
@@ -971,6 +1087,9 @@ impl App {
         egui::Window::new(self.t(T::confirm_title)).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             ui.label(self.t(T::confirm_body1));
             ui.label(self.t(T::confirm_body2));
+            if self.any_managed() {
+                ui.label(self.t(T::menus_restore_note));
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui.button(self.t(T::cancel)).clicked() {
@@ -1071,6 +1190,7 @@ impl eframe::App for App {
         egui::Panel::left("settings").resizable(true).default_size(560.0).min_size(460.0).show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.add_space(8.0);
+                self.menus_offer(ui);
                 self.section_general(ui);
                 ui.separator();
                 self.section_theme(ui);
@@ -1078,6 +1198,8 @@ impl eframe::App for App {
                 self.section_backgrounds(ui);
                 ui.separator();
                 self.section_entries(ui);
+                ui.separator();
+                self.section_menus(ui);
                 ui.add_space(12.0);
                 if self.scroll_entries {
                     ui.scroll_to_cursor(Some(egui::Align::BOTTOM));

@@ -122,6 +122,21 @@ limited). "Disable bootpick" marks its firmware entry inactive so the next
 loader in the boot order starts; nothing is deleted. "Uninstall" removes the
 menu, its boot entry and the app.
 
+**Other boot menus.** When bootpick starts Ubuntu or elementary OS, their
+GRUB shows a second menu; systemd-boot (Pop!_OS) can too when the firmware
+starts it directly. The app lists these menus and offers to hide them:
+
+- GRUB: adds a marked block to `<grub dir>/custom.cfg` (sourced by
+  `41_custom`, so it survives `update-grub`) that sets `timeout=0` and
+  `timeout_style=hidden`, except after a failed boot. Hold Shift or press Esc
+  to see the menu anyway.
+- systemd-boot: sets `timeout 0` in `\loader\loader.conf` and keeps the old
+  line in a comment. Hold Space to see the menu anyway.
+
+"Show menu again" removes exactly what bootpick added. Disabling or
+uninstalling bootpick restores every menu it hid, so the next boot loader is
+still a way to reach all systems.
+
 `bootpick-config --demo DIR[:LABEL],DIR2[:LABEL]` runs without root against
 plain folders (used for the screenshots above).
 

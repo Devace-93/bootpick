@@ -1,10 +1,13 @@
 //! The privileged half (run through `pkexec bootpick-config --helper`). It only
-//! touches \EFI\bootpick on the ESP, the "bootpick" firmware boot entry, and
-//! the app's own installed files. Files coming from the user's staging copy
+//! touches \EFI\bootpick on the ESP, the "bootpick" firmware boot entry,
+//! the app's own installed files, and (on request) the menu settings of other
+//! boot loaders: a marked block in GRUB's custom.cfg and the `timeout` line of
+//! systemd-boot's loader.conf (see menus.rs). Files coming from the user's staging copy
 //! are checked (regular files, allowed names and sizes) before they are
 //! written.
 
 use crate::host::{self, DirStorage, Mounted, Part, RootOverride};
+use crate::menus::{self, Env};
 use crate::proto::{LoadReply, Reply, Request, ScanJ};
 use std::fs;
 use std::io::{BufRead, Write};
@@ -99,6 +102,7 @@ fn load(staging: &str, uid: u32) -> Result<LoadReply, String> {
         scan: ScanJ::from(&hs.scan),
         detections: hs.detections,
         boot_entry: bootpick_entry(),
+        menus: menus::scan(&Env::Real { parts: &parts }),
     })
 }
 
@@ -169,6 +173,11 @@ fn set_enabled(enabled: bool) -> Result<String, String> {
     if !ok {
         return Err("efibootmgr failed".into());
     }
+    if !enabled {
+        // The firmware now starts another loader: its menu is the way to
+        // reach the other systems again.
+        menus::restore_all(&Env::Real { parts: &host::partitions() });
+    }
     if enabled {
         let order: Vec<String> = std::iter::once(n).chain(host::boot_order().into_iter().filter(|x| *x != n)).map(|x| format!("{:04X}", x)).collect();
         let _ = Command::new("efibootmgr").args(["-q", "-o", &order.join(",")]).status();
@@ -177,6 +186,7 @@ fn set_enabled(enabled: bool) -> Result<String, String> {
 }
 
 fn uninstall() -> Result<String, String> {
+    menus::restore_all(&Env::Real { parts: &host::partitions() });
     if let Ok((esp, _)) = find_esp() {
         let m = Mounted::open(&esp, true).ok_or("cannot mount the EFI partition read-write")?;
         let dir = DirStorage::new(&m.dir).resolve("\\EFI\\bootpick");
@@ -210,19 +220,27 @@ pub fn run() -> ! {
             Err(e) => Reply::Error { message: format!("bad request: {}", e) },
             Ok(Request::Quit) => break,
             Ok(Request::Load { staging }) => match load(&staging, uid) {
-                Ok(l) => Reply::Ok { load: Some(l), message: String::new() },
+                Ok(l) => Reply::Ok { load: Some(l), message: String::new(), menus: None },
                 Err(e) => Reply::Error { message: e },
             },
             Ok(Request::Save { staging }) => match save(&staging, uid) {
-                Ok(m) => Reply::Ok { load: None, message: m },
+                Ok(m) => Reply::Ok { load: None, message: m, menus: None },
                 Err(e) => Reply::Error { message: e },
             },
             Ok(Request::SetEnabled { enabled }) => match set_enabled(enabled) {
-                Ok(m) => Reply::Ok { load: None, message: m },
+                Ok(m) => Reply::Ok { load: None, message: m, menus: Some(menus::scan(&Env::Real { parts: &host::partitions() })) },
                 Err(e) => Reply::Error { message: e },
             },
+            Ok(Request::SetMenu { id, visible }) => {
+                let parts = host::partitions();
+                let env = Env::Real { parts: &parts };
+                match menus::set(&env, &id, visible) {
+                    Ok(()) => Reply::Ok { load: None, message: String::new(), menus: Some(menus::scan(&env)) },
+                    Err(e) => Reply::Error { message: e },
+                }
+            }
             Ok(Request::Uninstall) => match uninstall() {
-                Ok(m) => Reply::Ok { load: None, message: m },
+                Ok(m) => Reply::Ok { load: None, message: m, menus: None },
                 Err(e) => Reply::Error { message: e },
             },
         };

@@ -387,7 +387,7 @@ fn collect_hints(st: &mut DirStorage, scan: &Scan, first: usize, hints: &mut Vec
 }
 
 /// `search.fs_uuid X root` / `search --fs-uuid --set=root X` in a GRUB stub.
-fn grub_stub_uuid(cfg: &str) -> Option<String> {
+pub fn grub_stub_uuid(cfg: &str) -> Option<String> {
     for line in cfg.lines() {
         let l = line.trim();
         if !l.starts_with("search") {
@@ -464,7 +464,7 @@ fn grub_first_title(cfg: &str) -> Option<String> {
     None
 }
 
-fn detect_in_dir(dir: &Path) -> Option<Detection> {
+pub fn detect_in_dir(dir: &Path) -> Option<Detection> {
     for rel in ["etc/os-release", "usr/lib/os-release"] {
         if let Ok(t) = fs::read_to_string(dir.join(rel)) {
             if let Some(d) = parse_os_release(&t) {

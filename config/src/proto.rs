@@ -2,6 +2,7 @@
 //! one JSON object per line over the helper's stdin/stdout.
 
 use crate::host::Detection;
+use crate::menus::LoaderMenu;
 use bootpick_core::scan::{Entry, Kind, Scan, Volume};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -14,6 +15,8 @@ pub enum Request {
     /// Copy the allowed files from `staging` back to the ESP.
     Save { staging: String },
     SetEnabled { enabled: bool },
+    /// Hide or restore a GRUB / systemd-boot menu (see menus.rs).
+    SetMenu { id: String, visible: bool },
     Uninstall,
     Quit,
 }
@@ -104,11 +107,20 @@ pub struct LoadReply {
     pub detections: BTreeMap<String, Detection>,
     /// Firmware entry "bootpick": number, active, first in BootOrder.
     pub boot_entry: Option<(u16, bool, bool)>,
+    /// Second boot menus (GRUB, systemd-boot) shown after bootpick.
+    #[serde(default)]
+    pub menus: Vec<LoaderMenu>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Reply {
-    Ok { load: Option<LoadReply>, message: String },
+    Ok {
+        load: Option<LoadReply>,
+        message: String,
+        /// The boot menus after a change, when it may have touched them.
+        #[serde(default)]
+        menus: Option<Vec<LoaderMenu>>,
+    },
     Error { message: String },
 }

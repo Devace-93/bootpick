@@ -12,6 +12,7 @@ mod helper;
 mod host;
 mod i18n_app;
 mod imaging;
+mod menus;
 mod proto;
 
 use eframe::egui;
