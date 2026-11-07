@@ -1,7 +1,8 @@
 //! Launching entries and system actions.
 
 use crate::esp;
-use crate::scan::{Kind, Volume};
+use crate::scan::Vol as Volume;
+use bootpick_core::scan::Kind;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;

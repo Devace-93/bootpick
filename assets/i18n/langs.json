@@ -1,0 +1,172 @@
+[
+ {
+  "code": "es-MX",
+  "country": "mx",
+  "name": "Español (México)"
+ },
+ {
+  "code": "es-ES",
+  "country": "es",
+  "name": "Español (España)"
+ },
+ {
+  "code": "es-CO",
+  "country": "co",
+  "name": "Español (Colombia)"
+ },
+ {
+  "code": "es-AR",
+  "country": "ar",
+  "name": "Español (Argentina)"
+ },
+ {
+  "code": "es-CL",
+  "country": "cl",
+  "name": "Español (Chile)"
+ },
+ {
+  "code": "es-PE",
+  "country": "pe",
+  "name": "Español (Perú)"
+ },
+ {
+  "code": "en-US",
+  "country": "us",
+  "name": "English (US)"
+ },
+ {
+  "code": "en-GB",
+  "country": "gb",
+  "name": "English (UK)"
+ },
+ {
+  "code": "en-CA",
+  "country": "ca",
+  "name": "English (Canada)"
+ },
+ {
+  "code": "en-AU",
+  "country": "au",
+  "name": "English (Australia)"
+ },
+ {
+  "code": "en-NZ",
+  "country": "nz",
+  "name": "English (New Zealand)"
+ },
+ {
+  "code": "fr-FR",
+  "country": "fr",
+  "name": "Français (France)"
+ },
+ {
+  "code": "de-DE",
+  "country": "de",
+  "name": "Deutsch (Deutschland)"
+ },
+ {
+  "code": "de-AT",
+  "country": "at",
+  "name": "Deutsch (Österreich)"
+ },
+ {
+  "code": "it-IT",
+  "country": "it",
+  "name": "Italiano (Italia)"
+ },
+ {
+  "code": "pt-BR",
+  "country": "br",
+  "name": "Português (Brasil)"
+ },
+ {
+  "code": "pt-PT",
+  "country": "pt",
+  "name": "Português (Portugal)"
+ },
+ {
+  "code": "nl-NL",
+  "country": "nl",
+  "name": "Nederlands (Nederland)"
+ },
+ {
+  "code": "sv-SE",
+  "country": "se",
+  "name": "Svenska (Sverige)"
+ },
+ {
+  "code": "pl-PL",
+  "country": "pl",
+  "name": "Polski (Polska)"
+ },
+ {
+  "code": "cs-CZ",
+  "country": "cz",
+  "name": "Čeština (Česko)"
+ },
+ {
+  "code": "ro-RO",
+  "country": "ro",
+  "name": "Română (România)"
+ },
+ {
+  "code": "el-GR",
+  "country": "gr",
+  "name": "Ελληνικά (Ελλάδα)"
+ },
+ {
+  "code": "uk-UA",
+  "country": "ua",
+  "name": "Українська (Україна)"
+ },
+ {
+  "code": "ru-RU",
+  "country": "ru",
+  "name": "Русский (Россия)"
+ },
+ {
+  "code": "tr-TR",
+  "country": "tr",
+  "name": "Türkçe (Türkiye)"
+ },
+ {
+  "code": "ar-SA",
+  "country": "sa",
+  "name": "العربية (السعودية)"
+ },
+ {
+  "code": "hi-IN",
+  "country": "in",
+  "name": "हिन्दी (भारत)"
+ },
+ {
+  "code": "zh-CN",
+  "country": "cn",
+  "name": "中文（中国）"
+ },
+ {
+  "code": "ja-JP",
+  "country": "jp",
+  "name": "日本語（日本）"
+ },
+ {
+  "code": "ko-KR",
+  "country": "kr",
+  "name": "한국어 (대한민국)"
+ },
+ {
+  "code": "vi-VN",
+  "country": "vn",
+  "name": "Tiếng Việt (Việt Nam)"
+ },
+ {
+  "code": "id-ID",
+  "country": "id",
+  "name": "Bahasa Indonesia (Indonesia)"
+ },
+ {
+  "code": "th-TH",
+  "country": "th",
+  "name": "ไทย (ประเทศไทย)"
+ }
+]

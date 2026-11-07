@@ -11,11 +11,11 @@ CODE="$QEMU_SHARE/edk2-x86_64-code.fd"
 VARS="$RUN/ovmf-vars.fd"
 [ -f "$VARS" ] || cp "$QEMU_SHARE/edk2-i386-vars.fd" "$VARS"
 
-cargo build --release --manifest-path "$ROOT/Cargo.toml" >/dev/null
+cargo build --release --target x86_64-unknown-uefi --manifest-path "$ROOT/uefi/Cargo.toml" >/dev/null
 mkdir -p "$ROOT/esp/EFI/BOOT"
-cp "$ROOT/target/x86_64-unknown-uefi/release/bootpick.efi" "$ROOT/esp/EFI/BOOT/BOOTX64.EFI"
+cp "$ROOT/uefi/target/x86_64-unknown-uefi/release/bootpick.efi" "$ROOT/esp/EFI/BOOT/BOOTX64.EFI"
 # Stand-in loaders so chainloading can be exercised without real operating systems.
-D="$ROOT/target/x86_64-unknown-uefi/release/dummy.efi"
+D="$ROOT/uefi/target/x86_64-unknown-uefi/release/dummy.efi"
 for f in EFI/Microsoft/Boot/bootmgfw.efi EFI/systemd/systemd-bootx64.efi EFI/ubuntu/shimx64.efi EFI/ubuntu/grubx64.efi EFI/ubuntu/mmx64.efi EFI/tools/memtest.efi; do
   mkdir -p "$(dirname "$ROOT/esp/$f")"; cp "$D" "$ROOT/esp/$f"
 done

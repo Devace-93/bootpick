@@ -1,0 +1,11 @@
+[package]
+name = "bootpick-core"
+version = "0.2.0"
+edition = "2021"
+description = "Platform-independent part of bootpick: rendering, text shaping, config, scanning rules and the menu state machine"
+license = "MIT"
+
+[dependencies]
+ab_glyph = { version = "0.2", default-features = false, features = ["libm"] }
+rustybuzz = { version = "0.20", default-features = false }
+libm = "0.2"

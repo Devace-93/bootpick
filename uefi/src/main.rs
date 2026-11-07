@@ -1,20 +1,16 @@
-//! bootpick — a mouse-driven, themeable UEFI boot picker.
+//! bootpick: a mouse-driven, themeable UEFI boot picker.
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
-mod bmp;
 mod boot;
-mod config;
 mod esp;
-mod font;
-mod gfx;
 mod input;
 mod scan;
+mod shell;
 mod trace;
-mod ui;
 
 use alloc::string::String;
 use uefi::prelude::*;
@@ -32,7 +28,7 @@ fn main() -> Status {
         uefi::system::uefi_revision()
     ));
     boot::load_drivers();
-    let scan = scan::scan();
+    let (scan, vols) = scan::scan();
     trace::line(&alloc::format!("scan: {} volumes, {} entries", scan.volumes.len(), scan.entries.len()));
     for (i, v) in scan.volumes.iter().enumerate() {
         trace::line(&alloc::format!("  volume {}: {} ({})", i, v.key, v.disk));
@@ -47,5 +43,5 @@ fn main() -> Status {
         ));
     }
     trace::flush();
-    ui::run(&scan)
+    shell::run(scan, vols)
 }

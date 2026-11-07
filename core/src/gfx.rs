@@ -4,7 +4,6 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
-use uefi::proto::console::gop::BltPixel;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Color {
@@ -490,9 +489,9 @@ impl Canvas {
         }
     }
 
-    pub fn as_blt(&self) -> &[BltPixel] {
-        // SAFETY: BltPixel is #[repr(C)] { blue, green, red, reserved }, 4 bytes,
-        // which is exactly the little-endian layout of our 0xXXRRGGBB u32.
-        unsafe { core::slice::from_raw_parts(self.px.as_ptr().cast::<BltPixel>(), self.px.len()) }
+    /// Pixels as little-endian 0x00RRGGBB words, the layout of UEFI's
+    /// `BltPixel` (blue, green, red, reserved).
+    pub fn pixels(&self) -> &[u32] {
+        &self.px
     }
 }

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Renders SVG/PNG icons and wallpapers into the BMP files bootpick loads at boot.
 
-Usage: uv run --with pillow --with cairosvg tools/build-assets.py [out_dir]
+Also renders the language flags and subsets the Noto fonts used for scripts
+DejaVu does not cover (CJK, Devanagari, Thai, Arabic) down to the characters
+the UI actually uses.
+
+Usage: uv run --with pillow --with cairosvg --with fonttools tools/build-assets.py [out_dir]
 """
 import io, os, struct, sys, glob
 from PIL import Image
@@ -112,6 +116,65 @@ def fit_square(img, size, pad=0.06):
     out.paste(img, ((size - img.width) // 2, (size - img.height) // 2), img)
     return out
 
+NOTO = "/usr/share/fonts"
+# name -> (font file, collection index, languages whose strings it must cover,
+#          Unicode ranges of language names it must cover)
+SCRIPT_FONTS = {
+    "cjk-sc": ("opentype/noto/NotoSansCJK-{w}.ttc", 2, ["zh"], [(0x2E80, 0x9FFF), (0xFF00, 0xFFEF), (0x3000, 0x303F)]),
+    "cjk-jp": ("opentype/noto/NotoSansCJK-{w}.ttc", 0, ["ja"], [(0x3040, 0x30FF), (0x2E80, 0x9FFF), (0xFF00, 0xFFEF), (0x3000, 0x303F)]),
+    "cjk-kr": ("opentype/noto/NotoSansCJK-{w}.ttc", 1, ["ko"], [(0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F)]),
+    "deva": ("truetype/noto/NotoSansDevanagari-{w}.ttf", 0, ["hi"], [(0x0900, 0x097F)]),
+    "thai": ("truetype/noto/NotoSansThai-{w}.ttf", 0, ["th"], [(0x0E00, 0x0E7F)]),
+    "arab": ("truetype/noto/NotoSansArabic-{w}.ttf", 0, ["ar"], [(0x0600, 0x06FF), (0xFE70, 0xFEFF)]),
+}
+
+
+def build_fonts(out_dir):
+    import json
+    from fontTools import subset
+    from fontTools.ttLib import TTFont
+    strings = json.load(open(os.path.join(ROOT, "assets", "i18n", "strings.json")))
+    langs = json.load(open(os.path.join(ROOT, "assets", "i18n", "langs.json")))
+    names = "".join(l["name"] for l in langs)
+    os.makedirs(out_dir, exist_ok=True)
+    for f in os.listdir(out_dir):
+        os.remove(os.path.join(out_dir, f))
+    total = 0
+    for name, (path, index, bases, ranges) in SCRIPT_FONTS.items():
+        chars = set()
+        for b in bases:
+            chars |= set("".join(strings[b]))
+        chars |= {c for c in names if any(lo <= ord(c) <= hi for lo, hi in ranges)}
+        chars |= set("0123456789 ()（）:：·.,-/{}")
+        for weight in ("Regular", "Bold"):
+            src = os.path.join(NOTO, path.format(w=weight))
+            font = TTFont(src, fontNumber=index, lazy=False)
+            opts = subset.Options()
+            opts.layout_features = ["*"]
+            opts.name_IDs = ["*"]
+            opts.hinting = False
+            opts.notdef_outline = True
+            sub = subset.Subsetter(opts)
+            sub.populate(text="".join(sorted(chars)))
+            sub.subset(font)
+            dst = os.path.join(out_dir, f"{name}-{weight.lower()}.ttf")
+            font.save(dst)
+            total += os.path.getsize(dst)
+    print(f"{2 * len(SCRIPT_FONTS)} font subsets ({total // 1024} KiB) -> {out_dir}")
+
+
+def build_flags(out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    n = 0
+    for path in sorted(glob.glob(os.path.join(ROOT, "assets", "flags", "*.svg"))):
+        name = os.path.splitext(os.path.basename(path))[0]
+        png = cairosvg.svg2png(bytestring=open(path, "rb").read(), output_width=64, output_height=48)
+        img = Image.open(io.BytesIO(png)).convert("RGBA")
+        write_bmp(os.path.join(out_dir, name + ".bmp"), img)
+        n += 1
+    print(f"{n} flags -> {out_dir}")
+
+
 def main():
     icons = os.path.join(OUT, "icons")
     bgs = os.path.join(OUT, "backgrounds")
@@ -143,6 +206,8 @@ def main():
         img = img.crop((l, t, l + tw, t + th))
         write_bmp24(os.path.join(bgs, name + ".bmp"), img); m += 1
     print(f"{m} backgrounds -> {bgs}")
+    build_flags(os.path.join(OUT, "flags"))
+    build_fonts(os.path.join(OUT, "fonts"))
 
 if __name__ == "__main__":
     main()

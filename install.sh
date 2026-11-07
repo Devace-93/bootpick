@@ -28,7 +28,7 @@ mountpoint -q "$ESP" || { echo "$ESP is not a mount point" >&2; exit 1; }
 entry_ids() {
   efibootmgr | sed -nE "s/^Boot([0-9A-Fa-f]{4})\*? ${LABEL}(\t.*)?$/\1/p"
 }
-EFI="$ROOT/target/x86_64-unknown-uefi/release/bootpick.efi"
+EFI="$ROOT/uefi/target/x86_64-unknown-uefi/release/bootpick.efi"
 DEST="$ESP/EFI/bootpick"
 
 if [ "$UNINSTALL" = 1 ]; then

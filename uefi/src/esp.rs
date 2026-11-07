@@ -115,3 +115,28 @@ pub fn list_dir(fs: &mut FileSystem, path: &str) -> Vec<(String, bool)> {
     out.sort();
     out
 }
+
+/// [`bootpick_core::storage::Storage`] over a UEFI simple file system.
+pub struct FsStorage(pub FileSystem);
+
+impl bootpick_core::storage::Storage for FsStorage {
+    fn read(&mut self, path: &str) -> Option<Vec<u8>> {
+        read(&mut self.0, path)
+    }
+    fn write(&mut self, path: &str, data: &[u8]) -> Result<(), String> {
+        if let Some((dir, _)) = path.rsplit_once('\\') {
+            if !dir.is_empty() {
+                if let Some(d) = cpath(dir) {
+                    let _ = self.0.create_dir_all(Path::new(&d));
+                }
+            }
+        }
+        write(&mut self.0, path, data)
+    }
+    fn list_dir(&mut self, path: &str) -> Vec<(String, bool)> {
+        list_dir(&mut self.0, path)
+    }
+    fn exists(&mut self, path: &str) -> bool {
+        exists(&mut self.0, path)
+    }
+}

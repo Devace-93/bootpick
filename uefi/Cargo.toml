@@ -1,0 +1,22 @@
+[package]
+name = "bootpick"
+version = "0.2.0"
+edition = "2021"
+description = "A mouse-driven, themeable UEFI boot picker"
+license = "MIT"
+
+[dependencies]
+bootpick-core = { path = "../core" }
+uefi = { version = "0.41", features = ["alloc", "global_allocator", "panic_handler", "logger"] }
+log = { version = "0.4", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+panic = "abort"
+opt-level = 1

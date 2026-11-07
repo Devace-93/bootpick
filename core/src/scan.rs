@@ -1,14 +1,13 @@
-//! Discovers bootable things: EFI loaders on every FAT volume, systemd-boot
-//! (BLS) entries, and the firmware's own Boot#### options.
+//! Rules that turn the files on a FAT volume into boot entries: Windows,
+//! systemd-boot (BLS) entries, vendor loaders, loose tools, plus firmware
+//! Boot#### options. Platform code supplies the volumes (as [`Storage`]) and
+//! the firmware options; the UEFI menu and the desktop app therefore produce
+//! identical entry ids.
 
-use crate::esp;
+use crate::storage::Storage;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use uefi::boot;
-use uefi::proto::media::fs::SimpleFileSystem;
-use uefi::runtime::{self, VariableVendor};
-use uefi::{CString16, Handle};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -34,13 +33,15 @@ pub struct Entry {
     pub location: String,
 }
 
-#[allow(dead_code)]
+#[derive(Clone, Debug)]
 pub struct Volume {
-    pub handle: Handle,
+    /// GPT partition GUID (lowercase) or another stable key.
     pub key: String,
+    /// Human label such as "NVMe p1".
     pub disk: String,
 }
 
+#[derive(Clone, Debug, Default)]
 pub struct Scan {
     pub volumes: Vec<Volume>,
     pub entries: Vec<Entry>,
@@ -60,6 +61,7 @@ pub fn icon_for(title: &str) -> &'static str {
     let l = title.to_ascii_lowercase();
     let table: &[(&str, &str)] = &[
         ("windows", "os_win"),
+        ("elementary", "os_elementary"),
         ("pop", "os_pop"),
         ("ubuntu", "os_ubuntu"),
         ("debian", "os_debian"),
@@ -87,35 +89,61 @@ pub fn icon_for(title: &str) -> &'static str {
     "os_unknown"
 }
 
-pub fn scan() -> Scan {
-    let mut volumes = Vec::new();
-    let mut entries = Vec::new();
-
-    let handles = boot::find_handles::<SimpleFileSystem>().unwrap_or_default();
-    for (i, h) in handles.into_iter().enumerate() {
-        let key = esp::volume_key(h, i);
-        let vol = volumes.len();
-        volumes.push(Volume { handle: h, key: key.clone(), disk: esp::disk_label(h) });
-        let Some(mut fs) = esp::open_fs(h) else { continue };
-        let disk = volumes[vol].disk.clone();
-        scan_volume(&mut fs, vol, &key, &disk, &mut entries);
+impl Scan {
+    /// Adds a volume and the entries found on it.
+    pub fn add_volume(&mut self, key: &str, disk: &str, fs: &mut dyn Storage) {
+        let vol = self.volumes.len();
+        self.volumes.push(Volume { key: key.to_string(), disk: disk.to_string() });
+        scan_volume(fs, vol, key, disk, &mut self.entries);
     }
 
-    disambiguate(&mut entries, &volumes);
-    scan_firmware_options(&mut entries);
-    let fw_setup_supported = os_indications_supported() & 1 != 0;
+    /// Call after all volumes were added and before firmware options.
+    pub fn finish_volumes(&mut self) {
+        disambiguate(&mut self.entries, &self.volumes);
+    }
 
-    Scan { volumes, entries, fw_setup_supported }
+    /// Adds an active firmware boot option (Boot####) with its description.
+    pub fn add_firmware_option(&mut self, n: u16, desc: &str) {
+        let desc = if desc.trim().is_empty() { format!("Boot{:04X}", n) } else { desc.to_string() };
+        self.entries.push(Entry {
+            id: format!("fw:{:04x}", n),
+            title: desc.clone(),
+            detail: format!("Firmware boot option Boot{:04X}", n),
+            icon: icon_for(&desc).to_string(),
+            kind: Kind::BootNext(n),
+            hidden_default: true,
+            location: String::new(),
+        });
+    }
 }
 
-fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, disk: &str, out: &mut Vec<Entry>) {
+/// Parses an EFI_LOAD_OPTION (a Boot#### variable): returns (active, description).
+pub fn parse_load_option(data: &[u8]) -> Option<(bool, String)> {
+    if data.len() < 8 {
+        return None;
+    }
+    let attrs = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    let mut desc = String::new();
+    let mut i = 6;
+    while i + 1 < data.len() {
+        let c = u16::from_le_bytes([data[i], data[i + 1]]);
+        if c == 0 {
+            break;
+        }
+        desc.push(char::from_u32(c as u32).unwrap_or('?'));
+        i += 2;
+    }
+    Some((attrs & 1 != 0, desc))
+}
+
+pub fn scan_volume(fs: &mut dyn Storage, vol: usize, key: &str, disk: &str, out: &mut Vec<Entry>) {
     let mk_id = |path: &str| format!("{}:{}", key, path.to_ascii_lowercase());
     let where_ = if disk.is_empty() { String::from("unknown disk") } else { String::from(disk) };
     let detail_of = |path: &str| format!("{}  ·  {}", path, where_);
 
     // Windows
     let win = "\\EFI\\Microsoft\\Boot\\bootmgfw.efi";
-    if esp::exists(fs, win) {
+    if fs.exists(win) {
         out.push(Entry {
             id: mk_id(win),
             title: "Windows".into(),
@@ -129,18 +157,18 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, disk: &str,
 
     // systemd-boot + BLS entries
     let sd_boot = "\\EFI\\systemd\\systemd-bootx64.efi";
-    let has_sd = esp::exists(fs, sd_boot);
+    let has_sd = fs.exists(sd_boot);
     let mut sd_entries = 0;
     // \EFI\<dir> folders that only hold kernels/initrds referenced by BLS entries
     // (e.g. Pop!_OS kernelstub's \EFI\Pop_OS-<uuid>\vmlinuz.efi). Not loaders.
     let mut bls_dirs: Vec<String> = Vec::new();
     if has_sd {
-        for (name, is_dir) in esp::list_dir(fs, "\\loader\\entries") {
+        for (name, is_dir) in fs.list_dir("\\loader\\entries") {
             if is_dir || !name.to_ascii_lowercase().ends_with(".conf") {
                 continue;
             }
             let path = format!("\\loader\\entries\\{}", name);
-            let Some(text) = esp::read_string(fs, &path) else { continue };
+            let Some(text) = fs.read_string(&path) else { continue };
             let stem = &name[..name.len() - 5];
             let mut title = stem.replace('_', " ").replace('-', " ");
             let mut version = String::new();
@@ -189,7 +217,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, disk: &str,
     let _ = sd_entries;
 
     // Other vendor directories under \EFI
-    for (dir, is_dir) in esp::list_dir(fs, "\\EFI") {
+    for (dir, is_dir) in fs.list_dir("\\EFI") {
         if !is_dir {
             continue;
         }
@@ -198,7 +226,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, disk: &str,
             continue;
         }
         let dir_path = format!("\\EFI\\{}", dir);
-        let files = esp::list_dir(fs, &dir_path);
+        let files = fs.list_dir(&dir_path);
         let efis: Vec<String> = files
             .iter()
             .filter(|(n, d)| !d && n.to_ascii_lowercase().ends_with(".efi"))
@@ -243,7 +271,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, disk: &str,
     }
 
     // Loose tools at the root.
-    for (name, is_dir) in esp::list_dir(fs, "\\") {
+    for (name, is_dir) in fs.list_dir("\\") {
         if is_dir || !name.to_ascii_lowercase().ends_with(".efi") {
             continue;
         }
@@ -279,49 +307,9 @@ fn pretty_vendor(dir: &str) -> String {
     }
 }
 
-fn scan_firmware_options(out: &mut Vec<Entry>) {
-    let Ok((order, _)) = runtime::get_variable_boxed(uefi::cstr16!("BootOrder"), &VariableVendor::GLOBAL_VARIABLE) else {
-        return;
-    };
-    for chunk in order.chunks_exact(2) {
-        let n = u16::from_le_bytes([chunk[0], chunk[1]]);
-        let Ok(name) = CString16::try_from(format!("Boot{:04X}", n).as_str()) else { continue };
-        let Ok((data, _)) = runtime::get_variable_boxed(&name, &VariableVendor::GLOBAL_VARIABLE) else { continue };
-        if data.len() < 8 {
-            continue;
-        }
-        let attrs = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-        if attrs & 1 == 0 {
-            continue; // inactive
-        }
-        let mut desc = String::new();
-        let mut i = 6;
-        while i + 1 < data.len() {
-            let c = u16::from_le_bytes([data[i], data[i + 1]]);
-            if c == 0 {
-                break;
-            }
-            desc.push(char::from_u32(c as u32).unwrap_or('?'));
-            i += 2;
-        }
-        if desc.trim().is_empty() {
-            desc = format!("Boot{:04X}", n);
-        }
-        out.push(Entry {
-            id: format!("fw:{:04x}", n),
-            title: desc.clone(),
-            detail: format!("Firmware boot option Boot{:04X}", n),
-            icon: icon_for(&desc).to_string(),
-            kind: Kind::BootNext(n),
-            hidden_default: true,
-            location: String::new(),
-        });
-    }
-}
-
 /// When several entries that are shown by default share a title (two ESPs with
 /// \EFI\ubuntu, for example), append where each lives so they can be told apart.
-fn disambiguate(entries: &mut [Entry], volumes: &[Volume]) {
+pub fn disambiguate(entries: &mut [Entry], volumes: &[Volume]) {
     let vol_of = |k: &Kind| match k {
         Kind::Efi { vol, .. } | Kind::LinuxBls { vol, .. } => Some(*vol),
         Kind::BootNext(_) => None,
@@ -341,12 +329,5 @@ fn disambiguate(entries: &mut [Entry], volumes: &[Volume]) {
                 entries[i].location = disk;
             }
         }
-    }
-}
-
-pub fn os_indications_supported() -> u64 {
-    match runtime::get_variable_boxed(uefi::cstr16!("OsIndicationsSupported"), &VariableVendor::GLOBAL_VARIABLE) {
-        Ok((d, _)) if d.len() >= 8 => u64::from_le_bytes(d[..8].try_into().unwrap()),
-        _ => 0,
     }
 }
