@@ -192,10 +192,27 @@ pub struct Mounted {
     temp: bool,
 }
 
+/// Temporary mounts made by this process: device -> (dir, users, writable).
+/// A partition opened twice (an ESP that also holds GRUB's files) reuses the
+/// first mount instead of failing on a second one.
+static MOUNTS: std::sync::Mutex<BTreeMap<String, (PathBuf, usize, bool)>> = std::sync::Mutex::new(BTreeMap::new());
+
 impl Mounted {
     pub fn open(p: &Part, writable: bool) -> Option<Mounted> {
         if let Some(mp) = p.mountpoint.as_ref().filter(|m| !m.is_empty()) {
             return Some(Mounted { dir: PathBuf::from(mp), temp: false });
+        }
+        let mut reg = MOUNTS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((dir, users, rw)) = reg.get_mut(&p.path) {
+            if writable && !*rw {
+                let ok = Command::new("mount").args(["-o", "remount,rw"]).arg(&*dir).status().map(|s| s.success()).unwrap_or(false);
+                if !ok {
+                    return None;
+                }
+                *rw = true;
+            }
+            *users += 1;
+            return Some(Mounted { dir: dir.clone(), temp: true });
         }
         let fstype = p.fstype.as_deref()?;
         if !matches!(fstype, "vfat" | "ext4" | "ext3" | "ext2" | "btrfs" | "xfs" | "f2fs") {
@@ -213,6 +230,7 @@ impl Mounted {
             let _ = fs::remove_dir(&dir);
             return None;
         }
+        reg.insert(p.path.clone(), (dir.clone(), 1, writable));
         Some(Mounted { dir, temp: true })
     }
 }
@@ -220,6 +238,19 @@ impl Mounted {
 impl Drop for Mounted {
     fn drop(&mut self) {
         if self.temp {
+            let mut reg = MOUNTS.lock().unwrap_or_else(|e| e.into_inner());
+            let key = reg.iter().find(|(_, v)| v.0 == self.dir).map(|(k, _)| k.clone());
+            if let Some(k) = key {
+                let last = {
+                    let e = reg.get_mut(&k).unwrap();
+                    e.1 -= 1;
+                    e.1 == 0
+                };
+                if !last {
+                    return;
+                }
+                reg.remove(&k);
+            }
             let _ = Command::new("umount").arg(&self.dir).status();
             let _ = fs::remove_dir(&self.dir);
         }
@@ -404,6 +435,65 @@ pub fn grub_stub_uuid(cfg: &str) -> Option<String> {
     None
 }
 
+/// GRUB's directory relative to the filesystem found by the stub
+/// (`set prefix=($root)'/boot/grub'` -> "boot/grub").
+pub fn grub_prefix(cfg: &str) -> String {
+    let mut prefix = None;
+    for line in cfg.lines() {
+        if let Some(v) = line.trim().strip_prefix("set prefix=") {
+            let v = v.split(')').next_back().unwrap_or(v);
+            prefix = Some(v.trim_matches(|c| c == '\'' || c == '"').trim_start_matches('/').to_string());
+        }
+    }
+    prefix.unwrap_or_else(|| "boot/grub".into())
+}
+
+/// `root=...` of the first `linux` line in a GRUB menu: the system it boots.
+fn grub_linux_root(cfg: &str) -> Option<String> {
+    for line in cfg.lines() {
+        let l = line.trim_start();
+        if l.starts_with("linux ") || l.starts_with("linuxefi ") {
+            return l.split_whitespace().find_map(|t| t.strip_prefix("root=")).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// The system behind a GRUB whose files are in `fs_root/prefix`: the
+/// filesystem's own os-release, else the root= of its first menu entry
+/// (GRUB kept on an ESP or a separate /boot), else the first menu title.
+pub fn detect_grub(fs_root: &Path, prefix: &str, lookup: &dyn Fn(&str) -> Option<Detection>) -> Option<Detection> {
+    for rel in ["etc/os-release", "usr/lib/os-release"] {
+        if let Some(d) = fs::read_to_string(fs_root.join(rel)).ok().and_then(|t| parse_os_release(&t)) {
+            return Some(d);
+        }
+    }
+    let cfg = fs::read_to_string(fs_root.join(prefix).join("grub.cfg")).ok();
+    if let Some(d) = cfg.as_deref().and_then(grub_linux_root).and_then(|spec| lookup(&spec)) {
+        return Some(d);
+    }
+    if let Some(title) = cfg.as_deref().and_then(grub_first_title) {
+        let id = title.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        return Some(Detection { icon: icon_for_os_id(&id).to_string(), name: title, id, version: String::new() });
+    }
+    detect_in_dir(fs_root)
+}
+
+/// Detection for a `root=` / `UUID=` spec: demo override, the running
+/// system, or a temporary read-only mount.
+pub fn detect_spec(parts: &[Part], overrides: &RootOverride, spec: &str) -> Option<Detection> {
+    let bare = spec.trim_start_matches("UUID=").trim_start_matches("PARTUUID=").to_string();
+    if let Some(dir) = overrides.get(&bare).or_else(|| overrides.get(spec)) {
+        return detect_in_dir(dir);
+    }
+    let p = find_part(parts, spec)?;
+    if p.mountpoint.as_deref() == Some("/") {
+        return detect_in_dir(Path::new("/"));
+    }
+    let m = Mounted::open(p, false)?;
+    detect_in_dir(&m.dir)
+}
+
 /// `root=UUID=...`, `root=PARTUUID=...` or `root=/dev/...` from BLS options.
 fn bls_root(text: &str) -> Option<String> {
     for line in text.lines() {
@@ -488,24 +578,26 @@ fn resolve_hints(parts: &[Part], hints: Vec<(String, Hint)>, overrides: &RootOve
     let mut out = BTreeMap::new();
     let mut cache: BTreeMap<String, Option<Detection>> = BTreeMap::new();
     for (id, hint) in hints {
-        let spec = match hint {
-            Hint::GrubStub(cfg) => grub_stub_uuid(&cfg).map(|u| format!("UUID={}", u)),
-            Hint::Bls(text) => bls_root(&text),
+        let (spec, prefix) = match hint {
+            Hint::GrubStub(cfg) => (grub_stub_uuid(&cfg).map(|u| format!("UUID={}", u)), Some(grub_prefix(&cfg))),
+            Hint::Bls(text) => (bls_root(&text), None),
         };
         let Some(spec) = spec else { continue };
         let det = cache
             .entry(spec.clone())
             .or_insert_with(|| {
-                let bare = spec.trim_start_matches("UUID=").trim_start_matches("PARTUUID=").to_string();
-                if let Some(dir) = overrides.get(&bare).or_else(|| overrides.get(&spec)) {
-                    return detect_in_dir(dir);
+                let Some(prefix) = &prefix else { return detect_spec(parts, overrides, &spec) };
+                let lookup = |s: &str| detect_spec(parts, overrides, s);
+                let bare = spec.trim_start_matches("UUID=").to_string();
+                if let Some(dir) = overrides.get(&bare) {
+                    return detect_grub(dir, prefix, &lookup);
                 }
                 let p = find_part(parts, &spec)?;
                 if p.mountpoint.as_deref() == Some("/") {
-                    return detect_in_dir(Path::new("/"));
+                    return detect_grub(Path::new("/"), prefix, &lookup);
                 }
                 let m = Mounted::open(p, false)?;
-                detect_in_dir(&m.dir)
+                detect_grub(&m.dir, prefix, &lookup)
             })
             .clone();
         if let Some(d) = det {
@@ -524,6 +616,24 @@ mod tests {
         assert_eq!(grub_stub_uuid("search.fs_uuid 47d8a71c-c647 root \nset prefix=($root)'/grub'\n").as_deref(), Some("47d8a71c-c647"));
         assert_eq!(grub_stub_uuid("search --no-floppy --fs-uuid --set=root 2142a663-34a0-4b52\n").as_deref(), Some("2142a663-34a0-4b52"));
         assert_eq!(grub_stub_uuid("set root=hd0\n"), None);
+    }
+
+    #[test]
+    fn grub_on_esp_follows_root() {
+        let base = std::env::temp_dir().join(format!("bootpick-grub-{}", std::process::id()));
+        let esp = base.join("esp");
+        let root = base.join("root");
+        fs::create_dir_all(esp.join("EFI/ubuntu/grub")).unwrap();
+        fs::create_dir_all(root.join("etc")).unwrap();
+        fs::write(esp.join("EFI/ubuntu/grub/grub.cfg"), "menuentry 'Ubuntu' {\n\tlinux /vmlinuz root=UUID=F301 ro quiet\n}\n").unwrap();
+        fs::write(root.join("etc/os-release"), "NAME=\"elementary OS\"\nID=elementary\nVERSION_ID=8\n").unwrap();
+        let mut ov = RootOverride::new();
+        ov.insert("F301".into(), root.clone());
+        let prefix = grub_prefix("search.fs_uuid 4E38-0C72 root hd0,gpt6\nset prefix=($root)'/EFI/ubuntu/grub'\n");
+        assert_eq!(prefix, "EFI/ubuntu/grub");
+        let d = detect_grub(&esp, &prefix, &|s| detect_spec(&[], &ov, s)).unwrap();
+        assert_eq!(d.name, "elementary OS");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

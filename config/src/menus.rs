@@ -98,6 +98,14 @@ impl Env<'_> {
         }
     }
 
+    /// The system behind a `root=` spec (for naming a GRUB menu).
+    fn detect(&self, spec: &str) -> Option<host::Detection> {
+        match self {
+            Env::Real { parts } => host::detect_spec(parts, &RootOverride::new(), spec),
+            Env::Demo { overrides, .. } => host::detect_spec(&[], overrides, spec),
+        }
+    }
+
     fn real(&self) -> bool {
         matches!(self, Env::Real { .. })
     }
@@ -107,15 +115,7 @@ impl Env<'_> {
 
 /// (fs uuid, grub dir relative to that filesystem) from an ESP stub grub.cfg.
 fn grub_stub(cfg: &str) -> Option<(String, String)> {
-    let uuid = host::grub_stub_uuid(cfg)?;
-    let mut prefix = None;
-    for line in cfg.lines() {
-        if let Some(v) = line.trim().strip_prefix("set prefix=") {
-            let v = v.split(')').next_back().unwrap_or(v);
-            prefix = Some(v.trim_matches(|c| c == '\'' || c == '"').trim_start_matches('/').to_string());
-        }
-    }
-    Some((uuid, prefix.unwrap_or_else(|| "boot/grub".into())))
+    Some((host::grub_stub_uuid(cfg)?, host::grub_prefix(cfg)))
 }
 
 /// (visible, timeout) from a generated grub.cfg plus custom.cfg. Assignments
@@ -211,7 +211,7 @@ fn grub_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
                 continue;
             };
             let dir = root.join(&rel);
-            let name = host::detect_in_dir(&root).map(|d| d.name).unwrap_or_else(|| vendor.clone());
+            let name = host::detect_grub(&root, &rel, &|spec| env.detect(spec)).map(|d| d.name).unwrap_or_else(|| vendor.clone());
             let Ok(cfg) = fs::read_to_string(dir.join("grub.cfg")) else {
                 out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable) });
                 continue;

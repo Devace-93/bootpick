@@ -1008,9 +1008,6 @@ impl App {
                         };
                         ui.label(status.small());
                         ui.label(RichText::new(m.location.clone()).small().weak());
-                        if m.kind == MenuKind::SystemdBoot {
-                            ui.label(RichText::new(self.tf(T::menu_sd_note, &[&m.name])).small().weak());
-                        }
                     });
                 });
                 ui.horizontal(|ui| {

@@ -28,8 +28,8 @@ pub fn launch(kind: &Kind, volumes: &[Volume]) -> Result<(), String> {
             runtime::set_variable(uefi::cstr16!("LoaderEntryOneShot"), &SD_LOADER_VENDOR, volatile, &v)
                 .map_err(|e| format!("LoaderEntryOneShot: {:?}", e.status()))?;
             crate::trace::line(&format!("  LoaderEntryOneShot = {}", entry));
-            let zero: Vec<u8> = "0\0".encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
-            let _ = runtime::set_variable(uefi::cstr16!("LoaderConfigTimeoutOneShot"), &SD_LOADER_VENDOR, volatile, &zero);
+            // No LoaderConfigTimeoutOneShot: systemd-boot treats it as "force
+            // the menu" (with that timeout), so its menu would always appear.
             chainload(volumes, *vol, sd_boot)
         }
         Kind::BootNext(n) => {
