@@ -1,11 +1,12 @@
 # bootpick `beta`
 
-> **Status: beta, untested on real hardware.** Everything here has only been
-> exercised in QEMU/OVMF so far: no physical machine has booted bootpick yet.
-> Try it from a USB stick before installing it on an internal disk, keep your
-> existing boot loaders in place (the installer does), and know how to reach
-> your firmware's boot menu. Mouse support depends on the firmware exposing a
-> pointer device.
+> **Status: beta.** Tested in QEMU/OVMF and on one real machine so far: an
+> AMD Ryzen 4000 laptop with Insyde UEFI firmware, NVMe + SATA disks, booting
+> Windows, Pop!_OS (systemd-boot) and Ubuntu (shim/GRUB); mouse and touchpad
+> work through the firmware's own pointer drivers. Try it from a USB stick
+> before installing it on an internal disk, keep your existing boot loaders
+> in place (the installer does), and know how to reach your firmware's boot
+> menu. Mouse support depends on the firmware exposing a pointer device.
 
 
 A mouse-driven, themeable boot picker for UEFI machines, written in Rust
@@ -92,6 +93,19 @@ sudo ./install.sh --uninstall
 
 GRUB, systemd-boot and the Windows boot manager stay where they are; the
 firmware boot menu can still start them directly.
+
+## Troubleshooting
+
+- bootpick writes a log of every run to `EFI\bootpick\bootpick.log` on the
+  partition it started from: firmware, volumes, entries, input devices and
+  each launch step. If something hangs after you pick an entry, the log shows
+  whether bootpick handed over to the loader.
+- Some firmware (seen on an Insyde laptop with a Kingston DataTraveler Duo)
+  hangs at the logo whenever that USB stick is plugged in, with or without
+  bootpick. If testing from USB hangs only for some entries, try the same
+  entry from the firmware's own boot menu with the stick plugged in.
+- To get back to the previous boot loader: pick it from the firmware boot
+  menu (F12 on many laptops), boot Linux and run `sudo ./install.sh --uninstall`.
 
 ## Customising
 
