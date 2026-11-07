@@ -9,6 +9,7 @@
 mod app;
 mod helper;
 mod host;
+mod i18n_app;
 mod imaging;
 mod proto;
 
@@ -69,5 +70,5 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     let opts = app::Opts { mode, screenshot, open_theme_editor, preview_lang_menu };
-    eframe::run_native("bootpick settings", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, opts)))))
+    eframe::run_native("bootpick settings", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, opts).start(&cc.egui_ctx)))))
 }

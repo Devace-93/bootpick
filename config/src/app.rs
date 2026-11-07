@@ -3,6 +3,7 @@
 //! real boot menu, rendered by bootpick-core at 1920x1080.
 
 use crate::host::{self, DirStorage, RootOverride};
+use crate::i18n_app::{T, TABLE};
 use crate::imaging;
 use crate::proto::{LoadReply, Reply, Request, ScanJ};
 use bootpick_core::config::{builtin_themes, normalize_timeout, Config, EntryPref, Theme, THEME_FIELDS};
@@ -35,6 +36,7 @@ pub struct Opts {
     pub preview_lang_menu: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Job {
     Load,
     Save,
@@ -44,6 +46,7 @@ enum Job {
 
 enum JobResult {
     Loaded(Box<LoadReply>),
+    #[allow(dead_code)]
     Done(String),
     Failed(String),
 }
@@ -201,6 +204,13 @@ pub struct App {
     text: Option<TextEngine>,
     confirm_uninstall: bool,
     uninstalled: bool,
+    lang: &'static str,
+    strings: &'static [&'static str; crate::i18n_app::COUNT],
+    fonts_lang: &'static str,
+    font_files: Vec<(String, Arc<egui::FontData>, &'static str)>,
+    pending: Vec<Job>,
+    demo: bool,
+    ctx: egui::Context,
     frames_ready: u32,
     shot_requested: bool,
     shot_done: Arc<AtomicBool>,
@@ -213,20 +223,12 @@ impl App {
             .unwrap_or_else(|_| std::env::temp_dir())
             .join(format!("bootpick-staging-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&staging);
+        let demo = matches!(opts.mode, Mode::Demo { .. });
         let (jtx, jrx) = channel();
         let (rtx, rrx) = channel();
         let ctx = cc.egui_ctx.clone();
         let st = staging.clone();
         std::thread::spawn(move || worker(opts.mode, st, jrx, rtx, ctx));
-        let _ = jtx.send(Job::Load);
-        // DejaVu as a fallback: arrows, bullets and other symbols egui's
-        // default fonts lack.
-        let mut fonts = egui::FontDefinitions::default();
-        fonts.font_data.insert("dejavu".into(), Arc::new(egui::FontData::from_static(include_bytes!("../../assets/DejaVuSans.ttf"))));
-        for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-            fonts.families.entry(fam).or_default().push("dejavu".into());
-        }
-        cc.egui_ctx.set_fonts(fonts);
         let mut style = (*cc.egui_ctx.global_style()).clone();
         style.spacing.item_spacing = Vec2::new(8.0, 7.0);
         cc.egui_ctx.set_global_style(style);
@@ -236,7 +238,7 @@ impl App {
             staging,
             jobs: jtx,
             results: rrx,
-            busy: Some("Waiting for authorization and reading the boot configuration…".into()),
+            busy: None,
             loaded: None,
             scan: Scan::default(),
             cfg: Config::default(),
@@ -250,10 +252,85 @@ impl App {
             text: None,
             confirm_uninstall: false,
             uninstalled: false,
+            lang: langs::DEFAULT,
+            strings: &TABLE[0].1,
+            fonts_lang: "",
+            font_files: system_fonts(),
+            pending: vec![Job::Load],
+            demo,
+            ctx: cc.egui_ctx.clone(),
             frames_ready: 0,
             shot_requested: false,
             shot_done: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Starts the first load once the struct exists (so `busy` is localized).
+    pub fn start(mut self, ctx: &egui::Context) -> Self {
+        let sys = std::env::var("LC_ALL").or_else(|_| std::env::var("LC_MESSAGES")).or_else(|_| std::env::var("LANG")).unwrap_or_default();
+        let sys = sys.split('.').next().unwrap_or("").replace('_', "-");
+        self.set_lang(langs::resolve("", &sys), ctx);
+        self.pending.clear();
+        self.send(Job::Load);
+        self
+    }
+
+    fn t(&self, k: T) -> &'static str {
+        let s = self.strings[k as usize];
+        if self.rtl() {
+            // Leaked once per distinct string; the catalog is small.
+            return visual_cache(s);
+        }
+        s
+    }
+
+    fn tf(&self, k: T, args: &[&str]) -> String {
+        let mut s = self.strings[k as usize].to_string();
+        if self.rtl() {
+            // Arguments (paths, names) stay as left-to-right blocks: order the
+            // template with placeholder markers, then substitute.
+            for i in 0..args.len() {
+                s = s.replace(&format!("{{{}}}", i), &char::from_u32(0xE000 + i as u32).unwrap().to_string());
+            }
+            let mut v = bidi_visual(&s);
+            for (i, a) in args.iter().enumerate() {
+                v = v.replace(char::from_u32(0xE000 + i as u32).unwrap(), a);
+            }
+            return v;
+        }
+        for (i, a) in args.iter().enumerate() {
+            s = s.replace(&format!("{{{}}}", i), a);
+        }
+        s
+    }
+
+    fn rtl(&self) -> bool {
+        langs::is_rtl(self.lang)
+    }
+
+    fn set_lang(&mut self, code: &'static str, ctx: &egui::Context) {
+        self.lang = code;
+        let base = langs::base_of(code);
+        self.strings = TABLE.iter().find(|(b, _)| *b == base).map(|(_, r)| r).unwrap_or(&TABLE[0].1);
+        if self.fonts_lang != base {
+            apply_fonts(ctx, &self.font_files, base);
+            self.fonts_lang = langs::base_of(code);
+        }
+    }
+
+    fn send(&mut self, job: Job) {
+        self.busy = Some(
+            match job {
+                Job::Load => self.t(T::waiting_auth),
+                Job::Save => self.t(T::saving),
+                Job::SetEnabled(true) => self.t(T::enabling),
+                Job::SetEnabled(false) => self.t(T::disabling),
+                Job::Uninstall => self.t(T::uninstalling),
+            }
+            .to_string(),
+        );
+        self.pending.push(job);
+        let _ = self.jobs.send(job);
     }
 
     fn storage(&self) -> DirStorage {
@@ -274,6 +351,10 @@ impl App {
         let text = st.read_string(bootpick_core::paths::CONF).unwrap_or_default();
         self.cfg = Config::parse(&text);
         self.saved_text = self.cfg.serialize();
+        if !self.cfg.language.is_empty() {
+            let ctx = self.ctx.clone();
+            self.set_lang(langs::resolve(&self.cfg.language, ""), &ctx);
+        }
         // Every entry gets an explicit preference, in display order.
         let items = build_items(&self.scan, &self.cfg);
         let mut applied = Vec::new();
@@ -306,7 +387,7 @@ impl App {
             })
             .collect();
         if !applied.is_empty() {
-            self.message = Some((format!("Detected real system names: {}. Save to keep them.", applied.join(", ")), false));
+            self.message = Some((self.tf(T::detected_names, &[&applied.join(", ")]), false));
         }
         let mut engine = TextEngine::new();
         for (name, is_dir) in st.list_dir(bootpick_core::paths::FONTS) {
@@ -326,27 +407,33 @@ impl App {
     fn poll_jobs(&mut self) {
         while let Ok(r) = self.results.try_recv() {
             self.busy = None;
+            let job = if self.pending.is_empty() { None } else { Some(self.pending.remove(0)) };
             match r {
                 JobResult::Loaded(l) => self.on_loaded(*l),
-                JobResult::Done(m) => {
-                    if m.contains("removed") {
-                        self.uninstalled = true;
-                    }
-                    if m.contains("updated") || m.contains("Saved") {
+                JobResult::Done(_) => match job {
+                    Some(Job::Save) => {
                         self.saved_text = self.cfg.serialize();
                         self.files_changed = false;
-                    }
-                    if m.contains("enabled") || m.contains("disabled") {
-                        if let Some(l) = self.loaded.as_mut() {
-                            if let Some(be) = l.boot_entry.as_mut() {
-                                be.1 = m.contains("enabled");
-                                be.2 = be.1;
-                            }
+                        let mut m = self.t(T::saved_ok).to_string();
+                        if self.demo {
+                            m = format!("{} ({})", m, self.t(T::demo_note));
                         }
+                        self.message = Some((m, false));
                     }
-                    self.message = Some((m, false));
-                }
-                JobResult::Failed(e) => self.message = Some((e, true)),
+                    Some(Job::SetEnabled(enabled)) => {
+                        if let Some(be) = self.loaded.as_mut().and_then(|l| l.boot_entry.as_mut()) {
+                            be.1 = enabled;
+                            be.2 = enabled;
+                        }
+                        self.message = Some((self.t(if enabled { T::enabled_msg } else { T::disabled_msg }).to_string(), false));
+                    }
+                    Some(Job::Uninstall) => self.uninstalled = !self.demo,
+                    _ => {}
+                },
+                JobResult::Failed(e) => self.message = Some((self.tf(T::error, &[&e]), true)),
+            }
+            if self.busy.is_none() && !self.pending.is_empty() {
+                self.busy = Some(String::new());
             }
         }
     }
@@ -437,11 +524,11 @@ impl App {
     // ----- sections ---------------------------------------------------------------
 
     fn section_general(&mut self, ui: &mut egui::Ui) {
-        ui.heading("General");
+        ui.heading(self.t(T::general));
         ui.add_space(4.0);
         egui::Grid::new("general").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
-            ui.label("Language");
-            let current = langs::resolve(&self.cfg.language, "");
+            ui.label(self.t(T::language));
+            let current = self.lang;
             let resp = egui::ComboBox::from_id_salt("lang").width(260.0).selected_text(langs::get(langs::index_of(current).unwrap_or(0)).name).show_ui(ui, |ui| {
                 let mut chosen = None;
                 for i in 0..langs::count() {
@@ -459,11 +546,13 @@ impl App {
             });
             if let Some(Some(code)) = resp.inner {
                 self.cfg.language = code.to_string();
+                let ctx = ui.ctx().clone();
+                self.set_lang(code, &ctx);
                 self.preview_dirty = true;
             }
             ui.end_row();
 
-            ui.label("Auto-start after");
+            ui.label(self.t(T::autostart));
             let mut t = self.cfg.timeout as f64;
             if ui.add(egui::Slider::new(&mut t, 5.0..=60.0).step_by(5.0).fixed_decimals(0).suffix(" s")).changed() {
                 self.cfg.timeout = normalize_timeout(t as u32);
@@ -471,8 +560,8 @@ impl App {
             }
             ui.end_row();
 
-            ui.label("Default entry");
-            let names: Vec<(String, String)> = std::iter::once((DEFAULT_LAST.to_string(), "Last selected".to_string()))
+            ui.label(self.t(T::default_entry));
+            let names: Vec<(String, String)> = std::iter::once((DEFAULT_LAST.to_string(), self.t(T::last_selected).to_string()))
                 .chain(self.cfg.entries.iter().filter(|p| p.hidden != Some(true)).filter_map(|p| {
                     let e = self.scan.entries.iter().find(|e| e.id == p.id)?;
                     Some((p.id.clone(), if p.alias.is_empty() { e.title.clone() } else { p.alias.clone() }))
@@ -493,7 +582,7 @@ impl App {
     }
 
     fn section_theme(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Theme");
+        ui.heading(self.t(T::theme));
         ui.add_space(4.0);
         let themes = self.cfg.all_themes();
         let cur = themes.iter().position(|t| t.id == self.cfg.theme).unwrap_or(0);
@@ -506,20 +595,20 @@ impl App {
                     }
                 }
             });
-            if ui.button("Duplicate").on_hover_text("Create an editable copy of this theme").clicked() {
+            if ui.button(self.t(T::duplicate)).on_hover_text(self.t(T::duplicate_hint)).clicked() {
                 let mut n = 1;
                 while themes.iter().any(|t| t.id == format!("custom-{}", n)) {
                     n += 1;
                 }
                 let base = themes[cur].clone();
-                let t = Theme { id: format!("custom-{}", n), name: format!("{} (custom {})", base.name, n), ..base };
+                let t = Theme { id: format!("custom-{}", n), name: self.tf(T::custom_theme, &[&base.name, &n.to_string()]), ..base };
                 self.cfg.theme = t.id.clone();
                 self.cfg.themes.push(t);
                 self.open_theme_editor = true;
                 self.preview_dirty = true;
             }
             let is_custom = !builtin_themes().iter().any(|b| b.id == themes[cur].id);
-            if is_custom && ui.button("Delete").clicked() {
+            if is_custom && ui.button(self.t(T::delete)).clicked() {
                 let id = themes[cur].id.clone();
                 self.cfg.themes.retain(|t| t.id != id);
                 self.cfg.theme = "midnight".into();
@@ -527,21 +616,33 @@ impl App {
             }
         });
         let is_custom = self.cfg.themes.iter().any(|t| t.id == self.cfg.theme);
-        egui::CollapsingHeader::new("Colours").open(if self.open_theme_editor { Some(true) } else { None }).show(ui, |ui| {
+        egui::CollapsingHeader::new(self.t(T::colours)).open(if self.open_theme_editor { Some(true) } else { None }).show(ui, |ui| {
             self.open_theme_editor = false;
             if !is_custom {
-                ui.label(RichText::new("Built-in themes are read-only. Press Duplicate to edit a copy.").weak());
+                ui.label(RichText::new(self.t(T::builtin_readonly)).weak());
             }
             let theme_id = self.cfg.theme.clone();
+            let name_label = self.t(T::name);
             if let Some(t) = self.cfg.themes.iter_mut().find(|t| t.id == theme_id) {
                 ui.horizontal(|ui| {
-                    ui.label("Name");
+                    ui.label(name_label);
                     ui.text_edit_singleline(&mut t.name);
                 });
             }
             let current = self.cfg.all_themes().into_iter().find(|t| t.id == theme_id).unwrap_or_else(|| builtin_themes().remove(0));
             egui::Grid::new("colours").num_columns(4).spacing([10.0, 8.0]).show(ui, |ui| {
-                for (i, (key, label)) in THEME_FIELDS.iter().enumerate() {
+                for (i, (key, _)) in THEME_FIELDS.iter().enumerate() {
+                    let label = self.t(match *key {
+                        "bg0" => T::c_bg0,
+                        "bg1" => T::c_bg1,
+                        "accent" => T::c_accent,
+                        "text" => T::c_text,
+                        "text_dim" => T::c_text_dim,
+                        "panel" => T::c_panel,
+                        "tile" => T::c_tile,
+                        "tile_hover" => T::c_tile_hover,
+                        _ => T::c_danger,
+                    });
                     let mut c = to_c32(current.color(key).unwrap());
                     ui.add_enabled_ui(is_custom, |ui| {
                         if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::OnlyBlend).changed() {
@@ -551,7 +652,7 @@ impl App {
                             }
                         }
                     });
-                    ui.label(*label);
+                    ui.label(label);
                     if i % 2 == 1 {
                         ui.end_row();
                     }
@@ -562,7 +663,7 @@ impl App {
 
     fn section_backgrounds(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        ui.heading("Background");
+        ui.heading(self.t(T::background));
         ui.add_space(4.0);
         let mut names: Vec<String> = vec![String::new()];
         names.extend(self.storage().list_dir(bootpick_core::paths::BACKGROUNDS).into_iter().filter(|(n, d)| !d && n.to_ascii_lowercase().ends_with(".bmp")).map(|(n, _)| n));
@@ -585,7 +686,7 @@ impl App {
                         m
                     };
                     ui.painter().add(mesh);
-                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Gradient", egui::FontId::proportional(13.0), Color32::WHITE);
+                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, self.t(T::gradient), egui::FontId::proportional(13.0), Color32::WHITE);
                     r
                 } else {
                     match self.bmp_texture(&ctx, bootpick_core::paths::BACKGROUNDS, n, 256) {
@@ -595,7 +696,7 @@ impl App {
                 };
                 let stroke = if selected { egui::Stroke::new(3.0, ui.visuals().selection.stroke.color) } else { egui::Stroke::new(1.0, Color32::from_gray(70)) };
                 ui.painter().rect_stroke(resp.rect, 4.0, stroke, egui::StrokeKind::Outside);
-                let resp = resp.on_hover_text(if n.is_empty() { "Theme gradient".to_string() } else { n.trim_end_matches(".bmp").to_string() });
+                let resp = resp.on_hover_text(if n.is_empty() { self.t(T::theme_gradient).to_string() } else { n.trim_end_matches(".bmp").to_string() });
                 if resp.clicked() {
                     self.cfg.background = n.clone();
                     self.preview_dirty = true;
@@ -603,8 +704,8 @@ impl App {
             }
         });
         ui.horizontal(|ui| {
-            if ui.button("Add image…").clicked() {
-                if let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp"]).pick_file() {
+            if ui.button(self.t(T::add_image)).clicked() {
+                if let Some(path) = rfd::FileDialog::new().add_filter(self.t(T::images), &["png", "jpg", "jpeg", "webp", "bmp"]).pick_file() {
                     match imaging::import_background(&path) {
                         Ok(bytes) => {
                             let mut name = format!("{}.bmp", imaging::slug(&path));
@@ -623,7 +724,7 @@ impl App {
                     }
                 }
             }
-            if !self.cfg.background.is_empty() && ui.button("Remove selected").clicked() {
+            if !self.cfg.background.is_empty() && ui.button(self.t(T::remove_selected)).clicked() {
                 let p = self.storage().resolve(&format!("{}\\{}", bootpick_core::paths::BACKGROUNDS, self.cfg.background));
                 let _ = std::fs::remove_file(p);
                 self.cfg.background.clear();
@@ -636,8 +737,8 @@ impl App {
 
     fn section_entries(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        ui.heading("Boot entries");
-        ui.label(RichText::new("Checked entries appear on the main screen. Names and logos are what the menu shows.").weak());
+        ui.heading(self.t(T::boot_entries));
+        ui.label(RichText::new(self.t(T::entries_hint)).weak());
         ui.add_space(4.0);
         let detections = self.loaded.as_ref().map(|l| l.detections.clone()).unwrap_or_default();
         let n = self.cfg.entries.len();
@@ -650,7 +751,7 @@ impl App {
             egui::Frame::group(ui.style()).inner_margin(8.0).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let mut visible = self.cfg.entries[i].hidden != Some(true);
-                    if ui.checkbox(&mut visible, "").on_hover_text("Show on the main screen").changed() {
+                    if ui.checkbox(&mut visible, "").on_hover_text(self.t(T::show_on_main)).changed() {
                         self.cfg.entries[i].hidden = Some(!visible);
                         self.preview_dirty = true;
                     }
@@ -670,23 +771,23 @@ impl App {
                         }
                         let mut detail = entry.detail.clone();
                         if let Some(d) = detections.get(&entry.id) {
-                            detail = format!("Detected: {} {}  ·  {}", d.name, d.version, detail);
+                            detail = format!("{}  ·  {}", self.tf(T::detected, &[format!("{} {}", d.name, d.version).trim()]), detail);
                         }
                         ui.label(RichText::new(detail).small().weak());
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_enabled(i + 1 < n, egui::Button::new("⬇")).on_hover_text("Move down").clicked() {
+                        if ui.add_enabled(i + 1 < n, egui::Button::new("⬇")).on_hover_text(self.t(T::move_down)).clicked() {
                             swap = Some((i, i + 1));
                         }
-                        if ui.add_enabled(i > 0, egui::Button::new("⬆")).on_hover_text("Move up").clicked() {
+                        if ui.add_enabled(i > 0, egui::Button::new("⬆")).on_hover_text(self.t(T::move_up)).clicked() {
                             swap = Some((i, i - 1));
                         }
-                        if !self.cfg.entries[i].icon.is_empty() && ui.button("Reset logo").clicked() {
+                        if !self.cfg.entries[i].icon.is_empty() && ui.button(self.t(T::reset_logo)).clicked() {
                             self.cfg.entries[i].icon.clear();
                             self.preview_dirty = true;
                         }
-                        if ui.button("Logo…").on_hover_text("Use an image from your computer as this entry's logo").clicked() {
-                            if let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "svg"]).pick_file() {
+                        if ui.button(self.t(T::logo_btn)).on_hover_text(self.t(T::logo_hint)).clicked() {
+                            if let Some(path) = rfd::FileDialog::new().add_filter(self.t(T::images), &["png", "jpg", "jpeg", "webp", "bmp", "svg"]).pick_file() {
                                 match imaging::import_logo(&path) {
                                     Ok(bytes) => {
                                         let name = format!("custom-{}", imaging::slug(&path));
@@ -712,27 +813,26 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading(RichText::new("bootpick settings").strong());
+            ui.heading(RichText::new(self.t(T::title)).strong());
             if let Some(l) = &self.loaded {
-                ui.label(RichText::new(format!("on {} ({})", l.esp_device, l.esp_label)).weak());
+                ui.label(RichText::new(self.tf(T::on_device, &[&l.esp_device, &l.esp_label])).weak());
                 let enabled = l.boot_entry.map(|b| b.1).unwrap_or(false);
-                let status = if enabled { RichText::new("● enabled").color(Color32::from_rgb(74, 222, 128)) } else { RichText::new("● disabled").color(Color32::from_rgb(248, 113, 113)) };
+                let status = if enabled { RichText::new(self.t(T::enabled)).color(Color32::from_rgb(74, 222, 128)) } else { RichText::new(self.t(T::disabled)).color(Color32::from_rgb(248, 113, 113)) };
                 ui.label(status);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let busy = self.busy.is_some() || self.loaded.is_none();
-                if ui.add_enabled(!busy, egui::Button::new("Uninstall…")).clicked() {
+                if ui.add_enabled(!busy, egui::Button::new(self.t(T::uninstall_btn))).clicked() {
                     self.confirm_uninstall = true;
                 }
                 let enabled = self.loaded.as_ref().and_then(|l| l.boot_entry).map(|b| b.1).unwrap_or(false);
-                let label = if enabled { "Disable bootpick" } else { "Enable bootpick" };
+                let label = if enabled { self.t(T::disable_btn) } else { self.t(T::enable_btn) };
                 if ui
                     .add_enabled(!busy, egui::Button::new(label))
-                    .on_hover_text("Disabled: the firmware skips bootpick and starts the next boot loader. Nothing is deleted.")
+                    .on_hover_text(self.t(T::disable_hint))
                     .clicked()
                 {
-                    self.busy = Some(if enabled { "Disabling…".into() } else { "Enabling…".into() });
-                    let _ = self.jobs.send(Job::SetEnabled(!enabled));
+                    self.send(Job::SetEnabled(!enabled));
                 }
             });
         });
@@ -741,15 +841,13 @@ impl App {
     fn bottom_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let can_save = self.dirty() && self.busy.is_none();
-            let save = egui::Button::new(RichText::new("  Save  ").strong()).fill(if can_save { Color32::from_rgb(37, 99, 235) } else { Color32::TRANSPARENT });
+            let save = egui::Button::new(RichText::new(format!("  {}  ", self.t(T::save))).strong()).fill(if can_save { Color32::from_rgb(37, 99, 235) } else { Color32::TRANSPARENT });
             if ui.add_enabled(can_save, save).clicked() {
                 self.write_staging_conf();
-                self.busy = Some("Saving to the EFI partition…".into());
-                let _ = self.jobs.send(Job::Save);
+                self.send(Job::Save);
             }
-            if ui.add_enabled(self.dirty() && self.busy.is_none(), egui::Button::new("Revert")).clicked() {
-                self.busy = Some("Reloading…".into());
-                let _ = self.jobs.send(Job::Load);
+            if ui.add_enabled(self.dirty() && self.busy.is_none(), egui::Button::new(self.t(T::revert))).clicked() {
+                self.send(Job::Load);
             }
             if let Some(b) = &self.busy {
                 ui.spinner();
@@ -757,7 +855,7 @@ impl App {
             } else if let Some((m, err)) = &self.message {
                 ui.label(if *err { RichText::new(m).color(Color32::from_rgb(248, 113, 113)) } else { RichText::new(m) });
             } else if self.dirty() {
-                ui.label(RichText::new("Unsaved changes").weak());
+                ui.label(RichText::new(self.t(T::unsaved)).weak());
             }
         });
     }
@@ -766,18 +864,17 @@ impl App {
         if !self.confirm_uninstall {
             return;
         }
-        egui::Window::new("Uninstall bootpick?").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            ui.label("This removes bootpick from the EFI partition, deletes its firmware boot entry and removes this app.");
-            ui.label("Your other boot loaders (GRUB, systemd-boot, Windows) are not touched; the next one in the firmware boot order starts.");
+        egui::Window::new(self.t(T::confirm_title)).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            ui.label(self.t(T::confirm_body1));
+            ui.label(self.t(T::confirm_body2));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
+                if ui.button(self.t(T::cancel)).clicked() {
                     self.confirm_uninstall = false;
                 }
-                if ui.add(egui::Button::new(RichText::new("Uninstall").color(Color32::WHITE)).fill(Color32::from_rgb(185, 28, 28))).clicked() {
+                if ui.add(egui::Button::new(RichText::new(self.t(T::uninstall)).color(Color32::WHITE)).fill(Color32::from_rgb(185, 28, 28))).clicked() {
                     self.confirm_uninstall = false;
-                    self.busy = Some("Uninstalling…".into());
-                    let _ = self.jobs.send(Job::Uninstall);
+                    self.send(Job::Uninstall);
                 }
             });
         });
@@ -819,8 +916,8 @@ impl eframe::App for App {
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(120.0);
-                    ui.heading("bootpick was uninstalled");
-                    ui.label("Your previous boot loader starts on the next boot. You can close this window.");
+                    ui.heading(self.t(T::uninstalled_title));
+                    ui.label(self.t(T::uninstalled_body));
                 });
             });
             return;
@@ -844,9 +941,8 @@ impl eframe::App for App {
                         ui.label(self.busy.clone().unwrap_or_default());
                     } else if let Some((m, _)) = &self.message {
                         ui.label(RichText::new(m).color(Color32::from_rgb(248, 113, 113)));
-                        if ui.button("Try again").clicked() {
-                            self.busy = Some("Waiting for authorization…".into());
-                            let _ = self.jobs.send(Job::Load);
+                        if ui.button(self.t(T::try_again)).clicked() {
+                            self.send(Job::Load);
                         }
                     }
                 });
@@ -870,10 +966,11 @@ impl eframe::App for App {
         self.render_preview(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Preview");
-                ui.label(RichText::new("how the boot menu will look (not interactive)").weak());
+                ui.heading(self.t(T::preview));
+                ui.label(RichText::new(self.t(T::preview_hint)).weak());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.checkbox(&mut self.show_lang_menu, "Show language picker").changed() {
+                    let label = self.t(T::show_lang_picker);
+                    if ui.checkbox(&mut self.show_lang_menu, label).changed() {
                         self.preview_dirty = true;
                     }
                 });
@@ -895,4 +992,136 @@ impl Drop for App {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.staging);
     }
+}
+
+/// System fonts for scripts egui's defaults lack: (name, data, script tag).
+fn system_fonts() -> Vec<(String, Arc<egui::FontData>, &'static str)> {
+    let mut v = Vec::new();
+    let mut add = |name: &str, path: &str, index: u32, tag: &'static str| {
+        if let Ok(bytes) = std::fs::read(path) {
+            let mut fd = egui::FontData::from_owned(bytes);
+            fd.index = index;
+            v.push((name.to_string(), Arc::new(fd), tag));
+        }
+    };
+    let cjk = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc";
+    add("noto-cjk-jp", cjk, 0, "ja");
+    add("noto-cjk-kr", cjk, 1, "ko");
+    add("noto-cjk-sc", cjk, 2, "zh");
+    add("noto-deva", "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf", 0, "hi");
+    add("noto-thai", "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf", 0, "th");
+    add("noto-arab", "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf", 0, "ar");
+    v
+}
+
+/// egui fonts: defaults, DejaVu, then script fonts with the current
+/// language's font first (CJK variants share code points).
+fn apply_fonts(ctx: &egui::Context, files: &[(String, Arc<egui::FontData>, &'static str)], base: &str) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert("dejavu".into(), Arc::new(egui::FontData::from_static(include_bytes!("../../assets/DejaVuSans.ttf"))));
+    let mut order: Vec<String> = vec!["dejavu".into()];
+    let mut rest = Vec::new();
+    for (name, data, tag) in files {
+        fonts.font_data.insert(name.clone(), data.clone());
+        if *tag == base {
+            order.push(name.clone());
+        } else {
+            rest.push(name.clone());
+        }
+    }
+    order.extend(rest);
+    for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.entry(fam).or_default().extend(order.iter().cloned());
+    }
+    ctx.set_fonts(fonts);
+}
+
+/// egui shapes text but does not reorder mixed right-to-left / left-to-right
+/// runs. Reorders a right-to-left string into visual run order (same
+/// simplified bidi as the boot menu) so egui lays the runs out correctly;
+/// each Arabic run is still shaped right to left by egui itself.
+fn bidi_visual(s: &str) -> String {
+    #[derive(Clone, Copy, PartialEq)]
+    enum D {
+        L,
+        R,
+        N,
+    }
+    let is_r = |c: char| matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF) && c.is_alphabetic();
+    let chars: Vec<char> = s.chars().collect();
+    let is_marker = |c: char| (0xE000..0xE010).contains(&(c as u32));
+    let cls: Vec<D> = chars.iter().map(|&c| if is_r(c) { D::R } else if c.is_alphanumeric() || is_marker(c) { D::L } else { D::N }).collect();
+    let para = cls.iter().copied().find(|d| *d != D::N).unwrap_or(D::L);
+    if para != D::R {
+        return s.to_string();
+    }
+    let mut res = cls.clone();
+    for i in 0..res.len() {
+        if cls[i] != D::N {
+            continue;
+        }
+        let prev = cls[..i].iter().rev().copied().find(|d| *d != D::N).unwrap_or(para);
+        let next = cls[i + 1..].iter().copied().find(|d| *d != D::N).unwrap_or(para);
+        res[i] = if prev == next { prev } else { para };
+    }
+    let mut runs: Vec<(D, String)> = Vec::new();
+    for (c, d) in chars.iter().zip(&res) {
+        match runs.last_mut() {
+            Some((rd, t)) if *rd == *d => t.push(*c),
+            _ => runs.push((*d, c.to_string())),
+        }
+    }
+    runs.reverse();
+    // egui shapes each word on its own (so an Arabic word comes out right)
+    // but lays words out left to right. Inside a right-to-left run, reverse
+    // the order of words and punctuation and mirror brackets; words stay as
+    // they are.
+    let mirror = |c: char| match c {
+        '(' => ')',
+        ')' => '(',
+        '[' => ']',
+        ']' => '[',
+        '{' => '}',
+        '}' => '{',
+        '<' => '>',
+        '>' => '<',
+        '«' => '»',
+        '»' => '«',
+        other => other,
+    };
+    let in_word = |c: char| is_r(c) || matches!(c as u32, 0x0640..=0x065F | 0x0670 | 0x06D6..=0x06ED);
+    let mut out = String::new();
+    for (d, t) in runs {
+        if d != D::R {
+            out.push_str(&t);
+            continue;
+        }
+        let mut tokens: Vec<String> = Vec::new();
+        let mut word = String::new();
+        for c in t.chars() {
+            if in_word(c) {
+                word.push(c);
+            } else {
+                if !word.is_empty() {
+                    tokens.push(std::mem::take(&mut word));
+                }
+                tokens.push(mirror(c).to_string());
+            }
+        }
+        if !word.is_empty() {
+            tokens.push(word);
+        }
+        for tok in tokens.into_iter().rev() {
+            out.push_str(&tok);
+        }
+    }
+    out
+}
+
+fn visual_cache(s: &'static str) -> &'static str {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<HashMap<&'static str, &'static str>>> = Mutex::new(None);
+    let mut g = CACHE.lock().unwrap();
+    let map = g.get_or_insert_with(HashMap::new);
+    *map.entry(s).or_insert_with(|| Box::leak(bidi_visual(s).into_boxed_str()))
 }
