@@ -106,9 +106,12 @@ pub enum T {
     discard_close,
     revert_title,
     revert_body,
+    hide_after_crash,
+    hide_after_crash_hint,
+    menu_shown_crash,
 }
 
-pub const COUNT: usize = 103;
+pub const COUNT: usize = 106;
 
 pub static TABLE: &[(&str, [&str; COUNT])] = &[
     ("en", [
@@ -215,6 +218,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Close without saving",
         "Discard unsaved changes?",
         "Everything you changed since the last save will be lost.",
+        "Also hide it after a forced shutdown",
+        "Unticked: the menu appears only when the previous start of this system was interrupted (power cut, forced shutdown), so you can choose a recovery option.",
+        "Shown now: the previous start was interrupted",
     ]),
     ("es", [
         "Configuración de bootpick",
@@ -320,6 +326,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Cerrar sin guardar",
         "¿Descartar los cambios sin guardar?",
         "Se perderá todo lo que cambiaste desde el último guardado.",
+        "Ocultarlo también tras un apagado forzado",
+        "Desmarcada: el menú solo aparece cuando el arranque anterior de este sistema se interrumpió (corte de luz, apagado forzado), para que puedas elegir una opción de recuperación.",
+        "Visible ahora: el arranque anterior se interrumpió",
     ]),
     ("fr", [
         "Paramètres de bootpick",
@@ -425,6 +434,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Fermer sans enregistrer",
         "Abandonner les modifications non enregistrées ?",
         "Tout ce que vous avez modifié depuis le dernier enregistrement sera perdu.",
+        "Le masquer aussi après un arrêt forcé",
+        "Décochée : le menu n'apparaît que si le démarrage précédent de ce système a été interrompu (coupure de courant, arrêt forcé), pour choisir une option de récupération.",
+        "Affiché maintenant : le démarrage précédent a été interrompu",
     ]),
     ("de", [
         "bootpick-Einstellungen",
@@ -530,6 +542,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Ohne Speichern schließen",
         "Ungespeicherte Änderungen verwerfen?",
         "Alle Änderungen seit dem letzten Speichern gehen verloren.",
+        "Auch nach erzwungenem Ausschalten ausblenden",
+        "Nicht angehakt: Das Menü erscheint nur, wenn der vorige Start dieses Systems unterbrochen wurde (Stromausfall, erzwungenes Ausschalten), damit du eine Wiederherstellungsoption wählen kannst.",
+        "Jetzt sichtbar: der vorige Start wurde unterbrochen",
     ]),
     ("it", [
         "Impostazioni di bootpick",
@@ -635,6 +650,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Chiudi senza salvare",
         "Annullare le modifiche non salvate?",
         "Tutte le modifiche dall'ultimo salvataggio andranno perse.",
+        "Nascondilo anche dopo uno spegnimento forzato",
+        "Non selezionata: il menu appare solo se l'avvio precedente di questo sistema è stato interrotto (blackout, spegnimento forzato), per scegliere un'opzione di ripristino.",
+        "Visibile ora: l'avvio precedente è stato interrotto",
     ]),
     ("pt", [
         "Configurações do bootpick",
@@ -740,6 +758,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Fechar sem salvar",
         "Descartar as alterações não salvas?",
         "Tudo o que você mudou desde o último salvamento será perdido.",
+        "Ocultar também após um desligamento forçado",
+        "Desmarcada: o menu só aparece quando a inicialização anterior deste sistema foi interrompida (queda de energia, desligamento forçado), para você escolher uma opção de recuperação.",
+        "Visível agora: a inicialização anterior foi interrompida",
     ]),
     ("nl", [
         "bootpick-instellingen",
@@ -845,6 +866,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Sluiten zonder opslaan",
         "Niet-opgeslagen wijzigingen verwerpen?",
         "Alles wat je sinds de laatste keer opslaan hebt gewijzigd, gaat verloren.",
+        "Ook verbergen na geforceerd uitschakelen",
+        "Uitgevinkt: het menu verschijnt alleen als de vorige start van dit systeem werd onderbroken (stroomuitval, geforceerd uitschakelen), zodat je een herstelmodus kunt kiezen.",
+        "Nu zichtbaar: de vorige start werd onderbroken",
     ]),
     ("sv", [
         "Inställningar för bootpick",
@@ -950,6 +974,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Stäng utan att spara",
         "Kasta osparade ändringar?",
         "Allt du ändrat sedan du senast sparade går förlorat.",
+        "Dölj även efter tvingad avstängning",
+        "Avmarkerad: menyn visas bara när förra starten av systemet avbröts (strömavbrott, tvingad avstängning), så att du kan välja ett återställningsalternativ.",
+        "Visas nu: förra starten avbröts",
     ]),
     ("pl", [
         "Ustawienia bootpick",
@@ -1055,6 +1082,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Zamknij bez zapisywania",
         "Odrzucić niezapisane zmiany?",
         "Wszystkie zmiany od ostatniego zapisu zostaną utracone.",
+        "Ukrywaj też po wymuszonym wyłączeniu",
+        "Odznaczone: menu pojawia się tylko, gdy poprzednie uruchomienie tego systemu zostało przerwane (zanik zasilania, wymuszone wyłączenie), aby można było wybrać opcję odzyskiwania.",
+        "Teraz widoczne: poprzednie uruchomienie zostało przerwane",
     ]),
     ("cs", [
         "Nastavení bootpick",
@@ -1160,6 +1190,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Zavřít bez uložení",
         "Zahodit neuložené změny?",
         "Všechny změny od posledního uložení budou ztraceny.",
+        "Skrýt i po vynuceném vypnutí",
+        "Nezaškrtnuto: nabídka se zobrazí jen tehdy, když bylo předchozí spuštění systému přerušeno (výpadek proudu, vynucené vypnutí), abyste mohli zvolit obnovení.",
+        "Nyní zobrazeno: předchozí spuštění bylo přerušeno",
     ]),
     ("ro", [
         "Setări bootpick",
@@ -1265,6 +1298,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Închide fără salvare",
         "Renunți la modificările nesalvate?",
         "Tot ce ai modificat de la ultima salvare se va pierde.",
+        "Ascunde-l și după o oprire forțată",
+        "Debifat: meniul apare doar când pornirea anterioară a acestui sistem a fost întreruptă (pană de curent, oprire forțată), ca să poți alege o opțiune de recuperare.",
+        "Vizibil acum: pornirea anterioară a fost întreruptă",
     ]),
     ("el", [
         "Ρυθμίσεις bootpick",
@@ -1370,6 +1406,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Κλείσιμο χωρίς αποθήκευση",
         "Απόρριψη μη αποθηκευμένων αλλαγών;",
         "Ό,τι άλλαξες από την τελευταία αποθήκευση θα χαθεί.",
+        "Απόκρυψη και μετά από αναγκαστικό τερματισμό",
+        "Χωρίς επιλογή: το μενού εμφανίζεται μόνο όταν η προηγούμενη εκκίνηση του συστήματος διακόπηκε (διακοπή ρεύματος, αναγκαστικός τερματισμός), για να επιλέξεις ανάκτηση.",
+        "Εμφανίζεται τώρα: η προηγούμενη εκκίνηση διακόπηκε",
     ]),
     ("uk", [
         "Налаштування bootpick",
@@ -1475,6 +1514,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Закрити без збереження",
         "Відкинути незбережені зміни?",
         "Усе, що ви змінили після останнього збереження, буде втрачено.",
+        "Приховувати й після примусового вимкнення",
+        "Без позначки: меню з'являється лише тоді, коли попередній запуск системи було перервано (знеструмлення, примусове вимкнення), щоб вибрати відновлення.",
+        "Зараз видно: попередній запуск було перервано",
     ]),
     ("ru", [
         "Настройки bootpick",
@@ -1580,6 +1622,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Закрыть без сохранения",
         "Отменить несохранённые изменения?",
         "Всё, что вы изменили после последнего сохранения, будет потеряно.",
+        "Скрывать и после принудительного выключения",
+        "Без отметки: меню появляется, только если предыдущий запуск системы был прерван (отключение питания, принудительное выключение), чтобы можно было выбрать восстановление.",
+        "Сейчас видно: предыдущий запуск был прерван",
     ]),
     ("tr", [
         "bootpick ayarları",
@@ -1685,6 +1730,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Kaydetmeden kapat",
         "Kaydedilmemiş değişiklikler atılsın mı?",
         "Son kaydetmeden bu yana yaptığınız her değişiklik kaybolacak.",
+        "Zorla kapatmadan sonra da gizle",
+        "İşaretsiz: menü yalnızca bu sistemin önceki açılışı kesildiğinde (elektrik kesintisi, zorla kapatma) görünür; böylece bir kurtarma seçeneği seçebilirsiniz.",
+        "Şu an görünüyor: önceki açılış kesildi",
     ]),
     ("ar", [
         "إعدادات bootpick",
@@ -1790,6 +1838,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "إغلاق دون حفظ",
         "تجاهل التغييرات غير المحفوظة؟",
         "ستفقد كل ما غيّرته منذ آخر حفظ.",
+        "إخفاؤها أيضًا بعد إيقاف التشغيل القسري",
+        "عند إلغاء التحديد: تظهر القائمة فقط إذا انقطع آخر تشغيل لهذا النظام (انقطاع الكهرباء أو إيقاف قسري)، لتختار خيار استرداد.",
+        "ظاهرة الآن: انقطع التشغيل السابق",
     ]),
     ("hi", [
         "bootpick सेटिंग्स",
@@ -1895,6 +1946,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "सहेजे बिना बंद करें",
         "बिना सहेजे बदलाव छोड़ दें?",
         "पिछली बार सहेजने के बाद के सभी बदलाव खो जाएँगे।",
+        "ज़बरदस्ती बंद करने के बाद भी छिपाएँ",
+        "अनचेक: मेनू तभी दिखेगा जब इस सिस्टम का पिछला स्टार्ट बीच में रुका हो (बिजली गई, ज़बरदस्ती बंद), ताकि आप रिकवरी विकल्प चुन सकें।",
+        "अभी दिख रहा है: पिछला स्टार्ट बीच में रुका था",
     ]),
     ("zh", [
         "bootpick 设置",
@@ -2000,6 +2054,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "不保存并关闭",
         "放弃未保存的更改？",
         "自上次保存以来的所有更改都将丢失。",
+        "强制关机后也隐藏",
+        "取消勾选：仅当此系统上次启动被中断（断电、强制关机）时才显示菜单，以便选择恢复选项。",
+        "当前显示：上次启动被中断",
     ]),
     ("ja", [
         "bootpick 設定",
@@ -2105,6 +2162,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "保存せずに閉じる",
         "保存していない変更を破棄しますか？",
         "前回の保存以降の変更はすべて失われます。",
+        "強制終了の後も非表示にする",
+        "オフ：前回の起動が中断された場合（停電・強制終了）だけメニューを表示し、リカバリーを選べるようにします。",
+        "現在表示中：前回の起動が中断されました",
     ]),
     ("ko", [
         "bootpick 설정",
@@ -2210,6 +2270,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "저장하지 않고 닫기",
         "저장하지 않은 변경 사항을 버릴까요?",
         "마지막 저장 이후 변경한 내용이 모두 사라집니다.",
+        "강제 종료 후에도 숨기기",
+        "해제: 이 시스템의 이전 시작이 중단된 경우(정전, 강제 종료)에만 메뉴가 나타나 복구 옵션을 고를 수 있습니다.",
+        "현재 표시됨: 이전 시작이 중단됨",
     ]),
     ("vi", [
         "Cài đặt bootpick",
@@ -2315,6 +2378,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Đóng không lưu",
         "Bỏ các thay đổi chưa lưu?",
         "Mọi thay đổi từ lần lưu gần nhất sẽ bị mất.",
+        "Ẩn cả sau khi tắt máy cưỡng bức",
+        "Bỏ chọn: menu chỉ hiện khi lần khởi động trước của hệ thống bị gián đoạn (mất điện, tắt cưỡng bức) để bạn chọn chế độ khôi phục.",
+        "Đang hiện: lần khởi động trước bị gián đoạn",
     ]),
     ("id", [
         "Pengaturan bootpick",
@@ -2420,6 +2486,9 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "Tutup tanpa menyimpan",
         "Buang perubahan yang belum disimpan?",
         "Semua perubahan sejak penyimpanan terakhir akan hilang.",
+        "Sembunyikan juga setelah mati paksa",
+        "Tidak dicentang: menu hanya muncul jika start sebelumnya sistem ini terputus (listrik padam, mati paksa), agar Anda bisa memilih opsi pemulihan.",
+        "Tampil sekarang: start sebelumnya terputus",
     ]),
     ("th", [
         "การตั้งค่า bootpick",
@@ -2525,5 +2594,8 @@ pub static TABLE: &[(&str, [&str; COUNT])] = &[
         "ปิดโดยไม่บันทึก",
         "ละทิ้งการเปลี่ยนแปลงที่ยังไม่ได้บันทึกหรือไม่",
         "การเปลี่ยนแปลงทั้งหมดหลังการบันทึกครั้งล่าสุดจะหายไป",
+        "ซ่อนแม้หลังการปิดเครื่องแบบบังคับ",
+        "ไม่เลือก: เมนูจะแสดงเฉพาะเมื่อการเริ่มระบบครั้งก่อนถูกขัดจังหวะ (ไฟดับ ปิดเครื่องแบบบังคับ) เพื่อให้เลือกโหมดกู้คืนได้",
+        "แสดงอยู่: การเริ่มระบบครั้งก่อนถูกขัดจังหวะ",
     ]),
 ];

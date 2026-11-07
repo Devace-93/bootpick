@@ -16,7 +16,13 @@ pub enum Request {
     Save { staging: String },
     SetEnabled { enabled: bool },
     /// Hide or restore a GRUB / systemd-boot menu (see menus.rs).
-    SetMenu { id: String, visible: bool },
+    SetMenu {
+        id: String,
+        visible: bool,
+        /// GRUB: also hide after an interrupted start.
+        #[serde(default = "yes")]
+        always: bool,
+    },
     Uninstall,
     Quit,
 }
@@ -123,4 +129,8 @@ pub enum Reply {
         menus: Option<Vec<LoaderMenu>>,
     },
     Error { message: String },
+}
+
+fn yes() -> bool {
+    true
 }

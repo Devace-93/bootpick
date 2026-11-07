@@ -231,10 +231,10 @@ pub fn run() -> ! {
                 Ok(m) => Reply::Ok { load: None, message: m, menus: Some(menus::scan(&Env::Real { parts: &host::partitions() })) },
                 Err(e) => Reply::Error { message: e },
             },
-            Ok(Request::SetMenu { id, visible }) => {
+            Ok(Request::SetMenu { id, visible, always }) => {
                 let parts = host::partitions();
                 let env = Env::Real { parts: &parts };
-                match menus::set(&env, &id, visible) {
+                match menus::set(&env, &id, visible, always) {
                     Ok(()) => Reply::Ok { load: None, message: String::new(), menus: Some(menus::scan(&env)) },
                     Err(e) => Reply::Error { message: e },
                 }

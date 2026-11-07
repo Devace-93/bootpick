@@ -45,11 +45,19 @@ pub struct LoaderMenu {
     /// Hidden by bootpick (so it can be restored).
     pub managed: bool,
     pub problem: Option<Problem>,
+    /// GRUB: the previous start of this system was interrupted (grubenv
+    /// `recordfail=1`), so GRUB shows its menu for recovery.
+    #[serde(default)]
+    pub recordfail: bool,
+    /// GRUB hidden by bootpick: also hidden after an interrupted start.
+    #[serde(default)]
+    pub hide_always: bool,
 }
 
 impl LoaderMenu {
+    /// Offered for hiding: shown, changeable, not already handled by bootpick.
     pub fn can_hide(&self) -> bool {
-        self.visible && self.problem.is_none()
+        self.visible && self.problem.is_none() && !self.managed
     }
 }
 
@@ -204,6 +212,35 @@ fn strip_block(text: &str) -> String {
     s
 }
 
+/// The bootpick block inside a custom.cfg ("" when absent).
+fn block_of(text: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.trim() == BEGIN {
+            inside = true;
+        }
+        if inside {
+            out.push_str(line);
+            out.push('\n');
+            if line.trim() == END {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// `always`: hide even after an interrupted start; otherwise GRUB still shows
+/// its menu (30 s) when the previous start of that system did not finish.
+fn grub_block_for(always: bool) -> String {
+    if always {
+        grub_block()
+    } else {
+        format!("{}\nif [ \"${{recordfail}}\" != 1 ]; then\n  set timeout_style=hidden\n  set timeout=0\nfi\n{}\n", BEGIN, END)
+    }
+}
+
 fn grub_block() -> String {
     // Unconditional: a stuck `recordfail=1` would otherwise bring the menu
     // back on every boot. Shift / Esc still open it.
@@ -226,13 +263,13 @@ fn grub_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
             seen.push(uuid.clone());
             let id = format!("grub:{}", uuid);
             let Some((root, label, _g)) = env.fs_by_uuid(&uuid, false) else {
-                out.push(LoaderMenu { id, kind: MenuKind::Grub, name: vendor.clone(), location: esp.label.clone(), visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable) });
+                out.push(LoaderMenu { id, kind: MenuKind::Grub, name: vendor.clone(), location: esp.label.clone(), visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable), recordfail: false, hide_always: false });
                 continue;
             };
             let dir = root.join(&rel);
             let name = host::detect_grub(&root, &rel, &|spec| env.detect(spec)).map(|d| d.name).unwrap_or_else(|| vendor.clone());
             let Ok(cfg) = fs::read_to_string(dir.join("grub.cfg")) else {
-                out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable) });
+                out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable), recordfail: false, hide_always: false });
                 continue;
             };
             let custom = fs::read_to_string(dir.join("custom.cfg")).ok();
@@ -240,12 +277,14 @@ fn grub_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
             let (visible, timeout) = grub_state(&cfg, custom.as_deref(), recordfail);
             let managed = custom.as_deref().map(|c| c.contains(BEGIN)).unwrap_or(false);
             let problem = if sources_custom(&cfg) { None } else { Some(Problem::NoCustomCfg) };
-            out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible, timeout, managed, problem });
+            let block = custom.as_deref().map(block_of).unwrap_or_default();
+            let hide_always = managed && !block.contains("recordfail");
+            out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible, timeout, managed, problem, recordfail, hide_always });
         }
     }
 }
 
-fn set_grub(env: &Env, uuid: &str, visible: bool) -> Result<(), String> {
+fn set_grub(env: &Env, uuid: &str, visible: bool, always: bool) -> Result<(), String> {
     for esp in env.esps(false) {
         let mut st = DirStorage::new(&esp.dir);
         for (vendor, is_dir) in st.list_dir("\\EFI") {
@@ -265,7 +304,7 @@ fn set_grub(env: &Env, uuid: &str, visible: bool) -> Result<(), String> {
                 if !new.is_empty() && !new.ends_with('\n') {
                     new.push('\n');
                 }
-                new.push_str(&grub_block());
+                new.push_str(&grub_block_for(always));
             }
             if new.trim().is_empty() {
                 if path.exists() {
@@ -347,7 +386,7 @@ fn sd_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
         let file_value = loader_timeout(&conf);
         let value = efivar.clone().or(file_value);
         let (visible, timeout) = sd_state(value.as_deref());
-        out.push(LoaderMenu { id: format!("sd:{}", esp.key), kind: MenuKind::SystemdBoot, name: sd_title(&mut st), location: esp.label.clone(), visible, timeout, managed: conf.contains(SD_MARK), problem: None });
+        out.push(LoaderMenu { id: format!("sd:{}", esp.key), kind: MenuKind::SystemdBoot, name: sd_title(&mut st), location: esp.label.clone(), visible, timeout, managed: conf.contains(SD_MARK), problem: None, recordfail: false, hide_always: false });
     }
 }
 
@@ -407,9 +446,10 @@ pub fn scan(env: &Env) -> Vec<LoaderMenu> {
     out
 }
 
-pub fn set(env: &Env, id: &str, visible: bool) -> Result<(), String> {
+/// `always` (GRUB only): keep the menu hidden after an interrupted start too.
+pub fn set(env: &Env, id: &str, visible: bool, always: bool) -> Result<(), String> {
     let r = if let Some(u) = id.strip_prefix("grub:") {
-        set_grub(env, u, visible)
+        set_grub(env, u, visible, always)
     } else if let Some(k) = id.strip_prefix("sd:") {
         set_sd(env, k, visible)
     } else {
@@ -425,7 +465,7 @@ pub fn set(env: &Env, id: &str, visible: bool) -> Result<(), String> {
 pub fn restore_all(env: &Env) -> usize {
     let mut n = 0;
     for m in scan(env) {
-        if m.managed && set(env, &m.id, true).is_ok() {
+        if m.managed && set(env, &m.id, true, true).is_ok() {
             n += 1;
         }
     }
@@ -527,8 +567,17 @@ fi
         assert!(m.iter().all(|m| m.visible && !m.managed && m.can_hide()));
         assert_eq!(m[1].name, "Pop!_OS");
 
-        set(&env, "grub:U1", false).unwrap();
-        set(&env, "sd:k1", false).unwrap();
+        set(&env, "grub:U1", false, true).unwrap();
+        set(&env, "sd:k1", false, true).unwrap();
+        assert!(scan(&env)[0].hide_always);
+        // Unticked "also after a forced shutdown": shown only when recordfail is set.
+        set(&env, "grub:U1", false, false).unwrap();
+        let g = &scan(&env)[0];
+        assert!(g.managed && !g.hide_always && !g.visible);
+        fs::write(root.join("boot/grub/grubenv"), "# GRUB Environment Block\nrecordfail=1\n").unwrap();
+        let g = &scan(&env)[0];
+        assert!(g.managed && g.visible && g.recordfail && !g.can_hide());
+        fs::remove_file(root.join("boot/grub/grubenv")).unwrap();
         let m = scan(&env);
         assert!(m.iter().all(|m| !m.visible && m.managed), "{:?}", m);
         assert!(fs::read_to_string(root.join("boot/grub/custom.cfg")).unwrap().starts_with("# mine\n"));
