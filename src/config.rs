@@ -72,7 +72,8 @@ impl Config {
                 match k.as_str() {
                     "theme" => cfg.theme = v.to_ascii_lowercase(),
                     "background" => cfg.background = if v.eq_ignore_ascii_case("none") { String::new() } else { v.into() },
-                    "timeout" => cfg.timeout = v.parse().unwrap_or(10),
+                    // 5..=60 in steps of 5.
+                    "timeout" => cfg.timeout = ((v.parse::<u32>().unwrap_or(10).clamp(5, 60) + 2) / 5) * 5,
                     "default" => cfg.default_entry = v.into(),
                     "mouse_speed" => cfg.mouse_speed = v.parse().unwrap_or(8).clamp(1, 64),
                     _ => {}

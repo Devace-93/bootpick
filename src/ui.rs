@@ -22,6 +22,9 @@ pub const CONF_DIR: &str = "\\EFI\\bootpick";
 pub const CONF_PATH: &str = "\\EFI\\bootpick\\bootpick.conf";
 pub const ICON_DIR: &str = "\\EFI\\bootpick\\icons";
 pub const BG_DIR: &str = "\\EFI\\bootpick\\backgrounds";
+pub const LAST_PATH: &str = "\\EFI\\bootpick\\last-entry";
+/// Config value for "start whatever was picked last time".
+pub const DEFAULT_LAST: &str = "@last";
 
 #[derive(Clone, Debug)]
 pub struct Item {
@@ -63,7 +66,7 @@ enum Screen {
 }
 
 pub enum Outcome {
-    Launch(Kind),
+    Launch { entry: usize, remember: bool },
     Firmware,
     Reboot,
     Shutdown,
@@ -86,6 +89,7 @@ pub struct App<'a> {
     frame: Canvas,
     bg: Canvas,
     fonts: Fonts,
+    glyphs: font::GlyphCache,
     theme_idx: usize,
     bg_list: Vec<String>,
     bg_idx: usize,
@@ -109,10 +113,26 @@ pub struct App<'a> {
     cursor: Image,
     cursor_rect: Rect,
     default_id: String,
+    last_id: String,
     debug: bool,
+    frame_cycles: u64,
+    draw_cycles: u64,
 }
 
 const SELECTORS: usize = 4;
+
+// ---- tiny profiler for the debug overlay ([rect, icon, text, bg])
+static mut PROF: [u64; 4] = [0; 4];
+#[inline]
+fn tsc() -> u64 {
+    // SAFETY: rdtsc has no side effects.
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+#[inline]
+fn prof_add(i: usize, since: u64) {
+    // SAFETY: single-threaded boot services environment.
+    unsafe { PROF[i] += tsc() - since }
+}
 
 impl<'a> App<'a> {
     pub fn new(scan: &'a Scan, mut fs: Option<FileSystem>, status: Option<String>) -> Result<App<'a>, String> {
@@ -135,6 +155,7 @@ impl<'a> App<'a> {
         } else {
             cfg.default_entry.clone()
         };
+        let last_id = fs.as_mut().and_then(|f| esp::read_string(f, LAST_PATH)).map(|s| s.trim().to_string()).unwrap_or_default();
 
         let mut bg_list = alloc::vec![String::new()];
         if let Some(f) = fs.as_mut() {
@@ -161,6 +182,7 @@ impl<'a> App<'a> {
             frame: Canvas::new(w, h),
             bg: Canvas::new(w, h),
             fonts,
+            glyphs: font::GlyphCache::default(),
             theme_idx,
             bg_list,
             bg_idx,
@@ -184,9 +206,13 @@ impl<'a> App<'a> {
             cursor,
             cursor_rect: Rect::new(0, 0, 0, 0),
             default_id,
+            last_id,
             debug: false,
+            frame_cycles: 0,
+            draw_cycles: 0,
         };
-        app.sel = app.visible().iter().position(|&i| scan.entries[app.items[i].entry].id == app.default_id).unwrap_or(0);
+        let eff = app.effective_default();
+        app.sel = app.visible().iter().position(|&i| scan.entries[app.items[i].entry].id == eff).unwrap_or(0);
         app.render_background();
         Ok(app)
     }
@@ -205,6 +231,19 @@ impl<'a> App<'a> {
 
     fn visible(&self) -> Vec<usize> {
         (0..self.items.len()).filter(|&i| self.reveal || !self.items[i].hidden).collect()
+    }
+
+    /// The entry id that is pre-selected (and auto-started) on this boot.
+    fn effective_default(&self) -> String {
+        let want = if self.default_id == DEFAULT_LAST { &self.last_id } else { &self.default_id };
+        if self.items.iter().any(|it| !it.hidden && self.scan.entries[it.entry].id == *want) {
+            return want.clone();
+        }
+        self.items.iter().find(|it| !it.hidden).map(|it| self.scan.entries[it.entry].id.clone()).unwrap_or_default()
+    }
+
+    fn launch_item(&self, item: usize) -> Outcome {
+        Outcome::Launch { entry: self.items[item].entry, remember: self.default_id == DEFAULT_LAST }
     }
 
     fn entry_id(&self, item: usize) -> &str {
@@ -249,6 +288,12 @@ impl<'a> App<'a> {
     }
 
     fn draw_icon(&mut self, name: &str, cx: i32, cy: i32, size: i32, label: &str) {
+        let t0 = tsc();
+        self.draw_icon_inner(name, cx, cy, size, label);
+        prof_add(1, t0);
+    }
+
+    fn draw_icon_inner(&mut self, name: &str, cx: i32, cy: i32, size: i32, label: &str) {
         match self.icon(name, size) {
             Some(img) => self.scene.blit(&img, cx - size / 2, cy - size / 2),
             None => {
@@ -313,29 +358,44 @@ impl<'a> App<'a> {
     }
 
     fn redraw(&mut self) {
+        // SAFETY: rdtsc has no side effects; used only for the debug overlay.
+        let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+        // SAFETY: single-threaded.
+        let prof = unsafe { let p = PROF; PROF = [0; 4]; p };
         match self.screen {
             Screen::Main => self.draw_main(),
             Screen::Settings => self.draw_settings(),
         }
+        // SAFETY: see above.
+        let t1 = unsafe { core::arch::x86_64::_rdtsc() };
         if self.debug {
             let t = self.theme();
             let msg = format!(
-                "{}x{}  scale {:.2}  pointer ({},{})  {}",
-                self.w, self.h, self.s, self.input.x, self.input.y, self.input.stats
+                "frame {:.1} Mc (draw {:.1}, present {:.1}) rect {:.1} icon {:.1} text {:.1} bg {:.1}  {}",
+                self.frame_cycles as f32 / 1.0e6,
+                self.draw_cycles as f32 / 1.0e6, (self.frame_cycles.saturating_sub(self.draw_cycles)) as f32 / 1.0e6,
+                prof[0] as f32 / 1.0e6, prof[1] as f32 / 1.0e6, prof[2] as f32 / 1.0e6, prof[3] as f32 / 1.0e6, self.input.stats
             );
             self.text(false, 14.0 * self.s, self.px(12.0), self.px(8.0), t.text_dim, &msg);
         }
         self.present_full();
+        // SAFETY: see above.
+        self.frame_cycles = unsafe { core::arch::x86_64::_rdtsc() } - t0;
+        self.draw_cycles = t1 - t0;
     }
 
     fn text(&mut self, bold: bool, size: f32, x: i32, y: i32, color: Color, s: &str) -> i32 {
-        let f = if bold { &self.fonts.bold } else { &self.fonts.regular };
-        font::draw(&mut self.scene, f, size, x, y, color, s)
+        let t = tsc();
+        let r = font::draw_cached(&mut self.scene, &self.fonts, &self.glyphs, bold, size, x, y, color, s);
+        prof_add(2, t);
+        r
     }
 
     fn text_c(&mut self, bold: bool, size: f32, cx: i32, y: i32, color: Color, s: &str) -> i32 {
-        let f = if bold { &self.fonts.bold } else { &self.fonts.regular };
-        font::draw_centered(&mut self.scene, f, size, cx, y, color, s)
+        let t = tsc();
+        let r = font::draw_centered_cached(&mut self.scene, &self.fonts, &self.glyphs, bold, size, cx, y, color, s);
+        prof_add(2, t);
+        r
     }
 
     // ----- widgets --------------------------------------------------------------
@@ -367,11 +427,18 @@ impl<'a> App<'a> {
         self.hits.push(Hit { rect: r, action });
     }
 
-    fn tool(&mut self, cx: i32, y: i32, icon: &str, label: &str, action: Action) {
+    fn tool_width(&self, label: &str) -> i32 {
+        font::measure(&self.fonts.regular, 15.0 * self.s, label).max(self.px(76.0)) + self.px(28.0)
+    }
+
+    /// Draws a bottom-bar button whose left edge is `x`; returns its width.
+    fn tool(&mut self, x: i32, y: i32, icon: &str, label: &str, action: Action) -> i32 {
         let t = self.theme();
         let size = self.px(44.0);
         let hovered = self.is_hover(action);
-        let r = Rect::new(cx - self.px(52.0), y - self.px(8.0), self.px(104.0), self.px(84.0));
+        let tw = self.tool_width(label);
+        let cx = x + tw / 2;
+        let r = Rect::new(x, y - self.px(8.0), tw, self.px(84.0));
         if hovered {
             self.scene.fill_round_rect(r, self.px(14.0), t.tile_hover);
         }
@@ -380,12 +447,15 @@ impl<'a> App<'a> {
         let fs = 15.0 * self.s;
         self.text_c(false, fs, cx, y + size + self.px(6.0), t.text_dim, label);
         self.hits.push(Hit { rect: r, action });
+        tw
     }
 
     // ----- main screen ----------------------------------------------------------
 
     fn draw_main(&mut self) {
+        let t0 = tsc();
         self.scene.copy_from(&self.bg);
+        prof_add(3, t0);
         self.hits.clear();
         let t = self.theme();
         let (w, h) = (self.w as i32, self.h as i32);
@@ -428,6 +498,7 @@ impl<'a> App<'a> {
             let selected = k == self.sel;
             let hovered = self.is_hover(Action::Tile(k));
             let rad = self.px(26.0);
+            let tr = tsc();
             if selected {
                 self.scene.fill_round_rect(r, rad, t.accent.alpha(55));
                 self.scene.stroke_round_rect(r, rad, self.px(3.0).max(2), t.accent);
@@ -436,6 +507,7 @@ impl<'a> App<'a> {
             } else {
                 self.scene.fill_round_rect(r, rad, t.tile);
             }
+            prof_add(0, tr);
             let item = self.items[i].clone();
             let cx = r.x + r.w / 2;
             let cy = r.y + self.px(24.0) + icon / 2;
@@ -484,19 +556,21 @@ impl<'a> App<'a> {
             self.scene.fill_gradient(Rect::new(0, h - self.px(150.0), w, self.px(150.0)), t.bg0.alpha(0), t.bg0.alpha(190));
         }
         let bar_y = h - self.px(104.0);
-        let gx = self.px(80.0);
-        self.tool(gx, bar_y, "ui_gear", "Settings", Action::OpenSettings);
+        let gap = self.px(10.0);
+        let mut lx = self.px(24.0);
+        lx += self.tool(lx, bar_y, "ui_gear", "Settings", Action::OpenSettings) + gap;
         let hidden_n = self.items.iter().filter(|i| i.hidden).count();
         if hidden_n > 0 {
             let label = if self.reveal { "Hide extras".to_string() } else { format!("Show hidden ({})", hidden_n) };
-            self.tool(gx + self.px(120.0), bar_y, if self.reveal { "ui_eye_off" } else { "ui_eye" }, &label, Action::ToggleReveal);
+            self.tool(lx, bar_y, if self.reveal { "ui_eye_off" } else { "ui_eye" }, &label, Action::ToggleReveal);
         }
-        let mut rx = w - self.px(80.0);
+        let mut rx = w - self.px(24.0);
+        rx -= self.tool_width("Shut down");
         self.tool(rx, bar_y, "ui_power", "Shut down", Action::Shutdown);
-        rx -= self.px(120.0);
+        rx -= self.tool_width("Restart") + gap;
         self.tool(rx, bar_y, "ui_restart", "Restart", Action::Reboot);
         if self.scan.fw_setup_supported {
-            rx -= self.px(120.0);
+            rx -= self.tool_width("Firmware setup") + gap;
             self.tool(rx, bar_y, "ui_firmware", "Firmware setup", Action::Firmware);
         }
 
@@ -534,9 +608,8 @@ impl<'a> App<'a> {
                 let n = &self.bg_list[self.bg_idx];
                 if n.is_empty() { "None (gradient)".into() } else { n.trim_end_matches(".bmp").trim_end_matches(".BMP").replace(['_', '-'], " ") }
             }
-            2 => {
-                if self.cfg.timeout == 0 { "Off".into() } else { format!("{} s", self.cfg.timeout) }
-            }
+            2 => format!("{} s", self.cfg.timeout),
+            _ if self.default_id == DEFAULT_LAST => "Last selected".into(),
             _ => self
                 .items
                 .iter()
@@ -557,19 +630,17 @@ impl<'a> App<'a> {
                 self.render_background();
             }
             2 => {
-                let steps: [u32; 8] = [0, 3, 5, 10, 15, 30, 60, 120];
-                let pos = steps.iter().position(|&v| v >= self.cfg.timeout).unwrap_or(steps.len() - 1) as i32;
-                let np = (pos + dir).rem_euclid(steps.len() as i32) as usize;
-                self.cfg.timeout = steps[np];
+                // 5, 10, ... 60 seconds.
+                let pos = (self.cfg.timeout.clamp(5, 60) / 5 - 1) as i32;
+                let np = (pos + dir).rem_euclid(12) as u32;
+                self.cfg.timeout = (np + 1) * 5;
             }
             _ => {
-                let cands: Vec<usize> = (0..self.items.len()).filter(|&k| !self.items[k].hidden).collect();
-                if cands.is_empty() {
-                    return;
-                }
-                let cur = cands.iter().position(|&k| self.entry_id(k) == self.default_id).unwrap_or(0) as i32;
-                let n = cands[(cur + dir).rem_euclid(cands.len() as i32) as usize];
-                self.default_id = self.entry_id(n).to_string();
+                // "Last selected" first, then every visible entry.
+                let mut cands: Vec<String> = alloc::vec![DEFAULT_LAST.to_string()];
+                cands.extend((0..self.items.len()).filter(|&k| !self.items[k].hidden).map(|k| self.entry_id(k).to_string()));
+                let cur = cands.iter().position(|c| *c == self.default_id).unwrap_or(0) as i32;
+                self.default_id = cands[(cur + dir).rem_euclid(cands.len() as i32) as usize].clone();
             }
         }
     }
@@ -603,6 +674,9 @@ impl<'a> App<'a> {
         for i in 0..SELECTORS {
             let x = px + m + i as i32 * (sw + gap);
             let r = Rect::new(x, sy, sw, sh);
+            // Registered first: hit testing picks the last match, so the arrows
+            // drawn below must come after the box that contains them.
+            self.hits.push(Hit { rect: r, action: Action::FocusRow(usize::MAX - i) });
             let focused = self.focus == i;
             self.scene.fill_round_rect(r, self.px(14.0), t.tile);
             if focused {
@@ -625,7 +699,6 @@ impl<'a> App<'a> {
             let fs = 21.0 * self.s;
             let val = font::fit(&self.fonts.bold, fs, &val, sw - 2 * arrow - self.px(24.0));
             self.text_c(true, fs, x + sw / 2, sy + self.px(36.0), t.text, &val);
-            self.hits.push(Hit { rect: r, action: Action::FocusRow(usize::MAX - i) });
         }
 
         // List.
@@ -699,10 +772,8 @@ impl<'a> App<'a> {
                 }
                 self.hits.push(Hit { rect: Rect::new(tx - self.px(8.0), r.y, text_w + self.px(8.0), r.h), action: ea });
             }
-            let mut detail = if entry.title == item.alias { entry.detail.clone() } else { format!("{}  ·  {}", entry.title, entry.detail) };
-            if !entry.location.is_empty() {
-                detail = format!("{}  ·  {}", entry.location, detail);
-            }
+            let detail = if entry.title == item.alias { entry.detail.clone() } else { format!("{}  ·  {}", entry.title, entry.detail) };
+
             let detail = font::fit(&self.fonts.regular, 14.0 * self.s, &detail, text_w);
             self.text(false, 14.0 * self.s, tx, r.y + self.px(36.0), t.text_dim, &detail);
             // kind tag
@@ -711,7 +782,7 @@ impl<'a> App<'a> {
                 Kind::LinuxBls { .. } => "systemd-boot",
                 Kind::BootNext(_) => "Firmware option",
             };
-            let is_default = entry.id == self.default_id;
+            let is_default = entry.id == self.effective_default();
             let tag = if is_default { format!("{} · default", tag) } else { tag.to_string() };
             let tagx = r.x + r.w - right_controls - kind_w;
             self.text(false, 14.0 * self.s, tagx, r.y + self.px(20.0), if is_default { t.accent } else { t.text_dim }, &tag);
@@ -829,8 +900,7 @@ impl<'a> App<'a> {
                 if self.sel == k {
                     let vis = self.visible();
                     let item = vis[k];
-                    let kind = self.scan.entries[self.items[item].entry].kind.clone();
-                    return Some(Outcome::Launch(kind));
+                    return Some(self.launch_item(item));
                 }
                 self.sel = k;
             }
@@ -912,8 +982,7 @@ impl<'a> App<'a> {
                 match ch {
                     '\r' | '\n' => {
                         if n > 0 {
-                            let kind = self.scan.entries[self.items[vis[self.sel]].entry].kind.clone();
-                            return Some(Outcome::Launch(kind));
+                            return Some(self.launch_item(vis[self.sel]));
                         }
                     }
                     's' | 'S' => return self.act(Action::OpenSettings),
@@ -1053,7 +1122,7 @@ impl<'a> App<'a> {
                         if nt <= 0 {
                             let vis = self.visible();
                             if let Some(&item) = vis.get(self.sel) {
-                                return Outcome::Launch(self.scan.entries[self.items[item].entry].kind.clone());
+                                return self.launch_item(item);
                             }
                             self.countdown = None;
                         } else {
@@ -1104,6 +1173,20 @@ impl<'a> App<'a> {
                 }
             }
         }
+    }
+}
+
+/// Stores the id of the entry being started, for the "Last selected" default.
+/// Only writes when it changed, to keep writes to the ESP rare.
+fn remember_last(id: &str) {
+    let Some(mut fs) = uboot::get_image_file_system(uboot::image_handle()).ok().map(FileSystem::new) else { return };
+    let old = esp::read_string(&mut fs, LAST_PATH).unwrap_or_default();
+    if old.trim() == id {
+        return;
+    }
+    match esp::write(&mut fs, LAST_PATH, id.as_bytes()) {
+        Ok(()) => crate::trace::line(&format!("remembered last entry: {}", id)),
+        Err(e) => crate::trace::line(&format!("could not remember last entry: {}", e)),
     }
 }
 
@@ -1210,8 +1293,12 @@ pub fn run(scan: &Scan) -> ! {
             }
         };
         match outcome {
-            Outcome::Launch(kind) => {
-                if let Err(e) = boot::launch(&kind, &scan.volumes) {
+            Outcome::Launch { entry, remember } => {
+                let e_ref = &scan.entries[entry];
+                if remember {
+                    remember_last(&e_ref.id);
+                }
+                if let Err(e) = boot::launch(&e_ref.kind, &scan.volumes) {
                     crate::trace::line(&format!("launch failed: {}", e));
                     crate::trace::flush();
                     status = Some(format!("Could not start: {}", e));

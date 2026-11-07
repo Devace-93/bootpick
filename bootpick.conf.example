@@ -1,8 +1,8 @@
 # bootpick configuration. Edited from the Settings screen (gear icon) or by hand.
 theme = midnight          # midnight | pop | nord | ember | light
 background = none         # none, or a file name from EFI\bootpick\backgrounds\
-timeout = 10              # seconds before the default entry starts; 0 = wait
-default =                 # entry id (see the ids written after saving from the UI)
+timeout = 10              # seconds before the default entry starts: 5, 10, 15 ... 60
+default = @last           # @last = whatever was started last time, or an entry id
 mouse_speed = 8           # 1..64, pixels per millimetre of mouse travel
 
 # Entries appear here after the first save; `hidden = true` keeps an entry off

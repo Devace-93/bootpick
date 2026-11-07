@@ -193,6 +193,46 @@ impl Image {
     }
 }
 
+// ----- corner masks ------------------------------------------------------------
+
+use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
+use core::cell::RefCell;
+
+struct MaskCache(RefCell<BTreeMap<(i32, i32), Rc<Vec<u8>>>>);
+// SAFETY: UEFI boot services are single-threaded.
+unsafe impl Sync for MaskCache {}
+static MASKS: MaskCache = MaskCache(RefCell::new(BTreeMap::new()));
+
+/// Coverage (0..=255) of the top-left `radius`x`radius` corner of a rounded
+/// rectangle: filled when `thickness` is 0, otherwise a ring that thick.
+/// Computed once per (radius, thickness) with floats, then reused.
+fn corner_mask(radius: i32, thickness: i32) -> Rc<Vec<u8>> {
+    if let Some(m) = MASKS.0.borrow().get(&(radius, thickness)) {
+        return m.clone();
+    }
+    let n = radius as usize;
+    let rf = radius as f32;
+    let mut m = alloc::vec![0u8; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let dx = rf - (i as f32 + 0.5);
+            let dy = rf - (j as f32 + 0.5);
+            let d = libm::sqrtf(dx * dx + dy * dy) - rf;
+            let outer = (0.5 - d).clamp(0.0, 1.0);
+            let cov = if thickness == 0 {
+                outer
+            } else {
+                outer - (0.5 - (d + thickness as f32)).clamp(0.0, 1.0)
+            };
+            m[j * n + i] = (cov * 255.0 + 0.5) as u8;
+        }
+    }
+    let m = Rc::new(m);
+    MASKS.0.borrow_mut().insert((radius, thickness), m.clone());
+    m
+}
+
 pub struct Canvas {
     pub w: usize,
     pub h: usize,
@@ -294,82 +334,110 @@ impl Canvas {
         }
     }
 
-    /// Anti-aliased rounded rectangle (signed distance field).
+    /// Anti-aliased rounded rectangle. Corner coverage comes from a cached
+    /// quarter-circle mask, so the per-pixel work is integer only (the UEFI
+    /// target has no FPU: every f32 operation is emulated in software).
     pub fn fill_round_rect(&mut self, r: Rect, radius: i32, c: Color) {
-        if radius <= 0 {
+        let radius = radius.min(r.w / 2).min(r.h / 2).max(0);
+        if radius == 0 {
             self.fill_rect(r, c);
             return;
         }
-        let radius = radius.min(r.w / 2).min(r.h / 2) as f32;
         let clip = self.clip(r);
-        let cx = r.x as f32 + r.w as f32 / 2.0;
-        let cy = r.y as f32 + r.h as f32 / 2.0;
-        let hx = r.w as f32 / 2.0 - radius;
-        let hy = r.h as f32 / 2.0 - radius;
+        if clip.w <= 0 || clip.h <= 0 {
+            return;
+        }
+        let mask = corner_mask(radius, 0);
+        let rad = radius as usize;
         let base = c.packed() & 0x00ff_ffff;
+        let full = c.packed();
         for y in clip.y..clip.y + clip.h {
-            let py = y as f32 + 0.5;
-            let dy = (py - cy).abs() - hy;
-            // Fast path: rows fully inside the straight part.
-            if dy <= 0.0 {
-                let s = y as usize * self.w + clip.x as usize;
-                let v = c.packed();
-                for p in &mut self.px[s..s + clip.w as usize] {
-                    *p = blend(*p, v);
+            let ry = y - r.y;
+            let my = if ry < radius { Some(ry as usize) } else if ry >= r.h - radius { Some((r.h - 1 - ry) as usize) } else { None };
+            let row = y as usize * self.w;
+            match my {
+                None => {
+                    for p in &mut self.px[row + clip.x as usize..row + (clip.x + clip.w) as usize] {
+                        *p = blend(*p, full);
+                    }
                 }
-                continue;
-            }
-            for x in clip.x..clip.x + clip.w {
-                let px = x as f32 + 0.5;
-                let dx = (px - cx).abs() - hx;
-                let d = if dx <= 0.0 {
-                    dy - radius
-                } else {
-                    libm::sqrtf(dx * dx + dy * dy) - radius
-                };
-                let cov = (0.5 - d).clamp(0.0, 1.0);
-                if cov <= 0.0 {
-                    continue;
+                Some(my) => {
+                    for x in clip.x..clip.x + clip.w {
+                        let rx = x - r.x;
+                        let mx = if rx < radius { Some(rx as usize) } else if rx >= r.w - radius { Some((r.w - 1 - rx) as usize) } else { None };
+                        let v = match mx {
+                            None => full,
+                            Some(mx) => {
+                                let cov = mask[my * rad + mx] as u32;
+                                if cov == 0 {
+                                    continue;
+                                }
+                                ((cov * c.a as u32 / 255) << 24) | base
+                            }
+                        };
+                        let i = row + x as usize;
+                        self.px[i] = blend(self.px[i], v);
+                    }
                 }
-                let a = (c.a as f32 * cov) as u32;
-                let i = y as usize * self.w + x as usize;
-                self.px[i] = blend(self.px[i], (a << 24) | base);
             }
         }
     }
 
+    /// Anti-aliased rounded outline `t` pixels thick (integer only, see above).
     pub fn stroke_round_rect(&mut self, r: Rect, radius: i32, t: i32, c: Color) {
-        let radius = radius.min(r.w / 2).min(r.h / 2) as f32;
+        let radius = radius.min(r.w / 2).min(r.h / 2).max(0);
+        let t = t.max(1);
+        if radius == 0 {
+            self.fill_rect(Rect::new(r.x, r.y, r.w, t), c);
+            self.fill_rect(Rect::new(r.x, r.y + r.h - t, r.w, t), c);
+            self.fill_rect(Rect::new(r.x, r.y + t, t, r.h - 2 * t), c);
+            self.fill_rect(Rect::new(r.x + r.w - t, r.y + t, t, r.h - 2 * t), c);
+            return;
+        }
         let clip = self.clip(r);
-        let cx = r.x as f32 + r.w as f32 / 2.0;
-        let cy = r.y as f32 + r.h as f32 / 2.0;
-        let hx = r.w as f32 / 2.0 - radius;
-        let hy = r.h as f32 / 2.0 - radius;
+        if clip.w <= 0 || clip.h <= 0 {
+            return;
+        }
+        let mask = corner_mask(radius, t);
+        let rad = radius as usize;
         let base = c.packed() & 0x00ff_ffff;
-        let tf = t as f32;
+        let full = c.packed();
+        let band = radius.max(t);
         for y in clip.y..clip.y + clip.h {
-            let py = y as f32 + 0.5;
-            let dy = (py - cy).abs() - hy;
-            for x in clip.x..clip.x + clip.w {
-                let px = x as f32 + 0.5;
-                let dx = (px - cx).abs() - hx;
-                // Standard rounded-box signed distance.
-                let d = if dx <= 0.0 && dy <= 0.0 {
-                    dx.max(dy) - radius
-                } else {
-                    let ex = dx.max(0.0);
-                    let ey = dy.max(0.0);
-                    libm::sqrtf(ex * ex + ey * ey) - radius
-                };
-                let outer = (0.5 - d).clamp(0.0, 1.0);
-                let inner = (0.5 - (d + tf)).clamp(0.0, 1.0);
-                let cov = outer - inner;
-                if cov <= 0.0 {
-                    continue;
+            let ry = y - r.y;
+            let edge_row = ry < t || ry >= r.h - t;
+            let my = if ry < radius { Some(ry as usize) } else if ry >= r.h - radius { Some((r.h - 1 - ry) as usize) } else { None };
+            let row = y as usize * self.w;
+            let in_band = ry < band || ry >= r.h - band;
+            // Middle rows: only the left and right edges.
+            let spans: [(i32, i32); 2] = if in_band {
+                [(clip.x, clip.x + clip.w), (0, 0)]
+            } else {
+                [(clip.x, (r.x + t).min(clip.x + clip.w)), ((r.x + r.w - t).max(clip.x), clip.x + clip.w)]
+            };
+            for (x0, x1) in spans {
+                for x in x0..x1 {
+                    let rx = x - r.x;
+                    let mx = if rx < radius { Some(rx as usize) } else if rx >= r.w - radius { Some((r.w - 1 - rx) as usize) } else { None };
+                    let v = match (my, mx) {
+                        (Some(my), Some(mx)) => {
+                            let cov = mask[my * rad + mx] as u32;
+                            if cov == 0 {
+                                continue;
+                            }
+                            ((cov * c.a as u32 / 255) << 24) | base
+                        }
+                        _ => {
+                            let on_edge = edge_row || rx < t || rx >= r.w - t;
+                            if !on_edge {
+                                continue;
+                            }
+                            full
+                        }
+                    };
+                    let i = row + x as usize;
+                    self.px[i] = blend(self.px[i], v);
                 }
-                let a = (c.a as f32 * cov) as u32;
-                let i = y as usize * self.w + x as usize;
-                self.px[i] = blend(self.px[i], (a << 24) | base);
             }
         }
     }

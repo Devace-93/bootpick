@@ -32,7 +32,9 @@ screen to rename, hide, and reorder entries without editing files.
   "old kernel", MokManager and firmware entries are hidden; Esc reveals them.
 - Settings (gear icon or F2): checkboxes to show/hide, click a name to rename
   it, arrows to reorder, theme and wallpaper pickers with live preview,
-  auto-start timeout, default entry. Saved to `EFI\bootpick\bootpick.conf`.
+  auto-start timeout (5 to 60 s), default entry ("Last selected" starts
+  whatever was picked on the previous boot). Saved to
+  `EFI\bootpick\bootpick.conf`.
 - Firmware setup, restart and shut down buttons.
 - Mouse (Simple Pointer), touch (Absolute Pointer) and keyboard. Keyboard is
   always enough: arrows, Enter, Esc, F2 settings, F12 firmware setup, `d`
@@ -135,6 +137,7 @@ firmware boot menu can still start them directly.
 
 ## License
 
-MIT. Fonts: DejaVu (Bitstream Vera license). Distribution logos belong to their
-projects; the Pop!_OS and Ubuntu artwork comes from the Pop icon theme, some
-generic icons from rEFInd (GPLv3).
+MIT. Fonts: DejaVu (Bitstream Vera license). UI and generic icons: Font
+Awesome Free 6.7.2 (icons CC BY 4.0, see `assets/fa/LICENSE.txt`).
+Distribution logos belong to their projects; the Pop!_OS, Ubuntu, elementary
+and other distribution artwork comes from the Pop icon theme.

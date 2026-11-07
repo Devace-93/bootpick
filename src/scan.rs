@@ -97,7 +97,8 @@ pub fn scan() -> Scan {
         let vol = volumes.len();
         volumes.push(Volume { handle: h, key: key.clone(), disk: esp::disk_label(h) });
         let Some(mut fs) = esp::open_fs(h) else { continue };
-        scan_volume(&mut fs, vol, &key, &mut entries);
+        let disk = volumes[vol].disk.clone();
+        scan_volume(&mut fs, vol, &key, &disk, &mut entries);
     }
 
     disambiguate(&mut entries, &volumes);
@@ -107,10 +108,10 @@ pub fn scan() -> Scan {
     Scan { volumes, entries, fw_setup_supported }
 }
 
-fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut Vec<Entry>) {
+fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, disk: &str, out: &mut Vec<Entry>) {
     let mk_id = |path: &str| format!("{}:{}", key, path.to_ascii_lowercase());
-    let short = key.split('-').next().unwrap_or(key).to_string();
-    let detail_of = |path: &str| format!("{}  ·  volume {}", path, short);
+    let where_ = if disk.is_empty() { String::from("unknown disk") } else { String::from(disk) };
+    let detail_of = |path: &str| format!("{}  ·  {}", path, where_);
 
     // Windows
     let win = "\\EFI\\Microsoft\\Boot\\bootmgfw.efi";
@@ -166,7 +167,7 @@ fn scan_volume(fs: &mut uefi::fs::FileSystem, vol: usize, key: &str, out: &mut V
                 }
             }
             let hidden = looks_secondary(stem) || looks_secondary(&title);
-            let detail = if version.is_empty() { detail_of(&name) } else { format!("{} · {}  ·  volume {}", name, version, short) };
+            let detail = if version.is_empty() { detail_of(&name) } else { format!("{} · {}  ·  {}", name, version, where_) };
             let icon = icon_for(&title).to_string();
             let kind = match is_efi {
                 Some(p) if !p.is_empty() => Kind::Efi { vol, path: p.replace('/', "\\") },
