@@ -82,10 +82,12 @@ impl Config {
             }
             let Some((k, v)) = line.split_once('=') else { continue };
             let k = k.trim().to_ascii_lowercase();
-            // Values may carry a trailing "# comment".
+            // Values may carry a trailing "  # comment" (colours start with '#'
+            // too, so only a '#' after the value counts).
+            let v = v.trim();
             let v = match v.find(" #") {
-                Some(i) => v[..i].trim(),
-                None => v.trim(),
+                Some(i) if i > 0 => v[..i].trim(),
+                _ => v,
             };
             match &mut cur {
                 Section::Entry(e) => match k.as_str() {
@@ -307,4 +309,22 @@ pub fn builtin_themes() -> Vec<Theme> {
             Color::rgba(255, 255, 255, 225), Color::rgba(15, 23, 42, 14), Color::rgba(15, 23, 42, 30), Color::hex(0xdc2626),
         ]),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_theme_round_trip() {
+        let text = "theme = custom-1\ntimeout = 12 # comment\n\n[theme]\nid = custom-1\nname = Sunset\naccent = #ff8a5b\npanel = #24112ee0\n";
+        let c = Config::parse(text);
+        assert_eq!(c.timeout, 10);
+        assert_eq!(c.themes.len(), 1);
+        assert_eq!(c.themes[0].accent, Color::rgb(0xff, 0x8a, 0x5b));
+        assert_eq!(c.themes[0].panel, Color::rgba(0x24, 0x11, 0x2e, 0xe0));
+        let again = Config::parse(&c.serialize());
+        assert_eq!(again, c);
+        assert_eq!(c.all_themes().iter().find(|t| t.id == "custom-1").unwrap().name, "Sunset");
+    }
 }

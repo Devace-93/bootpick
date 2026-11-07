@@ -41,15 +41,28 @@ screen to rename, hide, and reorder entries without editing files.
   shows a debug line with pointer stats.
 - Scales with the screen resolution; works on any UEFI firmware. Secure Boot
   must be off, or the binary must be signed with your own key.
+- 34 languages (the same list as the 3m4 apps): a picker at the top right
+  with flags and native names. Text is shaped with rustybuzz, so Hindi, Thai
+  and Arabic (right to left) render correctly; CJK, Devanagari, Thai and
+  Arabic glyphs come from Noto subsets of about 630 KiB in total.
+- A desktop app, **bootpick settings**, with a live preview rendered by the
+  same code as the boot menu: language, timeout, default entry, entry names,
+  logos (import any image), backgrounds (add or remove), a theme editor with
+  colour pickers, and buttons to disable or uninstall bootpick. It detects
+  the real OS behind each loader (for example elementary OS installed in an
+  `\EFI\ubuntu` folder) from `os-release`.
+
 
 ## Build
 
 ```sh
-rustup target add x86_64-unknown-uefi
-cargo build --release          # target/x86_64-unknown-uefi/release/bootpick.efi
-uv run --with pillow --with cairosvg tools/build-assets.py   # icons + wallpapers (BMP) -> esp/EFI/bootpick/
-cp assets/drivers/*.efi esp/EFI/bootpick/drivers/            # optional USB mouse drivers
+tools/build.sh      # as your normal user: UEFI menu, settings app, assets
 ```
+
+It runs `cargo build --release --target x86_64-unknown-uefi --manifest-path
+uefi/Cargo.toml`, `cargo build --release -p bootpick-config` and, when the
+generated assets are missing, `tools/build-assets.py` (icons, wallpapers,
+flags and font subsets; needs `uv`, cairo and the Noto fonts).
 
 ## Try it in QEMU
 
@@ -90,12 +103,27 @@ tools/make-usb.sh /media/$USER/MYUSB
 Then boot the stick from the firmware boot menu. When happy:
 
 ```sh
-sudo ./install.sh          # copies to /boot/efi/EFI/bootpick, adds a boot entry first in order
+sudo ./install.sh           # boot menu + "bootpick settings" app, then opens the app
 sudo ./install.sh --uninstall
 ```
 
-GRUB, systemd-boot and the Windows boot manager stay where they are; the
-firmware boot menu can still start them directly.
+The installer copies the menu to `/boot/efi/EFI/bootpick`, adds a firmware
+boot entry first in the boot order, installs `bootpick-config` with a
+desktop entry, and opens it. GRUB, systemd-boot and the Windows boot manager
+stay where they are; the firmware boot menu can still start them directly.
+
+### The settings app
+
+`bootpick-config` runs as your user and asks for authorization once
+(`pkexec bootpick-config --helper`). The helper copies `\EFI\bootpick` to a
+private staging folder, the app edits that copy, and Save writes back only
+`bootpick.conf`, `icons\*.bmp` and `backgrounds\*.bmp` (regular files, size
+limited). "Disable bootpick" marks its firmware entry inactive so the next
+loader in the boot order starts; nothing is deleted. "Uninstall" removes the
+menu, its boot entry and the app.
+
+`bootpick-config --demo DIR[:LABEL],DIR2[:LABEL]` runs without root against
+plain folders (used for the screenshots above).
 
 ## Troubleshooting
 
@@ -123,21 +151,18 @@ firmware boot menu can still start them directly.
 
 ## Layout
 
-| file | role |
+| path | role |
 | --- | --- |
-| `src/main.rs` | entry point |
-| `src/scan.rs` | discovers volumes, loaders, BLS entries, firmware options |
-| `src/boot.rs` | chainloading, `LoaderEntryOneShot`, `BootNext`, firmware setup, drivers |
-| `src/ui.rs` | main screen, settings screen, cursor, event loop |
-| `src/input.rs` | keyboard, mice, absolute pointers, tick timer |
-| `src/gfx.rs`, `src/font.rs`, `src/bmp.rs` | software renderer, TrueType text, BMP decoding |
-| `src/config.rs` | `bootpick.conf` parser/writer and themes |
-| `src/esp.rs` | file-system helpers |
-| `src/bin/dummy.rs` | stand-in loader used by the QEMU tests |
+| `core/` | `no_std` library shared by both programs: renderer (`gfx`), text shaping and font fallback (`text`), BMP, config and themes, i18n, scanning rules (`scan`), the menu state machine (`menu`) |
+| `uefi/` | the boot menu: GOP output, mouse/keyboard input, volume and firmware scanning, chainloading, breadcrumb log |
+| `config/` | the desktop settings app (egui) and its privileged helper |
+| `assets/i18n/` | UI strings (`strings.json`) and locales (`langs.json`); `tools/gen-i18n.py` generates `core/src/i18n_data.rs` |
+| `tools/` | build, asset generation, QEMU harness, USB stick helper |
 
 ## License
 
-MIT. Fonts: DejaVu (Bitstream Vera license). UI and generic icons: Font
+MIT. Fonts: DejaVu (Bitstream Vera license); Noto Sans CJK, Devanagari, Thai
+and Arabic subsets (SIL OFL 1.1). Flags: lipis/flag-icons (MIT). UI and generic icons: Font
 Awesome Free 6.7.2 (icons CC BY 4.0, see `assets/fa/LICENSE.txt`).
 Distribution logos belong to their projects; the Pop!_OS, Ubuntu, elementary
 and other distribution artwork comes from the Pop icon theme.

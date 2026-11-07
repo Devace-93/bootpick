@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=bootpick settings
+GenericName=Boot menu settings
+Comment=Configure the bootpick boot menu: entries, logos, theme, background and language
+Exec=bootpick-config
+Icon=bootpick
+Terminal=false
+Categories=Settings;System;
+Keywords=boot;bootloader;grub;uefi;menu;
+StartupWMClass=bootpick-settings
