@@ -449,7 +449,7 @@ pub fn grub_prefix(cfg: &str) -> String {
 }
 
 /// `root=...` of the first `linux` line in a GRUB menu: the system it boots.
-fn grub_linux_root(cfg: &str) -> Option<String> {
+pub fn grub_linux_root(cfg: &str) -> Option<String> {
     for line in cfg.lines() {
         let l = line.trim_start();
         if l.starts_with("linux ") || l.starts_with("linuxefi ") {
