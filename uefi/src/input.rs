@@ -105,7 +105,7 @@ impl Input {
                 }
             }
         }
-        log::info!("bootpick input: {} mice, {} absolute pointers: {}", simple.len(), abs.len(), stats);
+        crate::trace::line(&alloc::format!("input: {} mice, {} absolute pointers: {}", simple.len(), abs.len(), stats));
         Input {
             simple,
             abs,

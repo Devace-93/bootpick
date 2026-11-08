@@ -35,9 +35,9 @@ fn open() -> Option<FileSystem> {
     boot::get_image_file_system(boot::image_handle()).ok().map(FileSystem::new)
 }
 
-/// Records one line (also echoed to the debug log/serial).
+/// Records one line in \EFI\bootpick\bootpick.log (not on screen: the
+/// console would show through the loading screens).
 pub fn line(msg: &str) {
-    log::info!("{}", msg);
     let mut st = STATE.0.borrow_mut();
     if !st.loaded {
         st.loaded = true;

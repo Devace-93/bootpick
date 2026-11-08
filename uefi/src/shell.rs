@@ -87,6 +87,12 @@ impl Screen {
         let _ = self.gop.blt(BltOp::BufferToVideo { buffer: as_blt(&self.frame), src: BltRegion::Full, dest: (0, 0), dims: (w, h) });
     }
 
+    fn present_plain(&mut self, scene: &Canvas) {
+        self.frame.copy_from(scene);
+        let (w, h) = (self.w, self.h);
+        let _ = self.gop.blt(BltOp::BufferToVideo { buffer: as_blt(&self.frame), src: BltRegion::Full, dest: (0, 0), dims: (w, h) });
+    }
+
     fn present_cursor(&mut self, scene: &Canvas, input: &Input) {
         let old = self.cursor_rect;
         self.frame.copy_rect_from(scene, old);
@@ -133,8 +139,28 @@ fn image_storage() -> Box<dyn Storage> {
     }
 }
 
+/// Steps of the start-up loading screen (see `splash`).
+pub const SPLASH_STEPS: usize = 4;
+
+/// Draws the loading screen (theme gradient + progress) so no firmware or
+/// console text shows while bootpick starts.
+pub fn splash(step: usize) {
+    if let Ok(mut screen) = Screen::open() {
+        let theme = bootpick_core::menu::saved_theme(&mut *image_storage());
+        let c = bootpick_core::menu::splash(screen.w, screen.h, &theme, step, SPLASH_STEPS);
+        screen.present_plain(&c);
+    }
+}
+
+/// TSC ticks per millisecond (for double clicks); measured once.
+fn tsc_per_ms() -> u64 {
+    let t0 = tsc();
+    uboot::stall(core::time::Duration::from_millis(20));
+    ((tsc() - t0) / 20).max(1)
+}
+
 /// Runs the menu until an outcome; redraws with frame timing.
-fn run_menu(menu: &mut Menu, screen: &mut Screen, input: &mut Input) -> Outcome {
+fn run_menu(menu: &mut Menu, screen: &mut Screen, input: &mut Input, per_ms: u64) -> Outcome {
     let mut frame_cycles = 0u64;
     let mut draw_cycles = 0u64;
     let redraw = |menu: &mut Menu, screen: &mut Screen, input: &Input, fc: &mut u64, dc: &mut u64| {
@@ -174,6 +200,7 @@ fn run_menu(menu: &mut Menu, screen: &mut Screen, input: &mut Input) -> Outcome 
                 }
             }
             InputEvent::Down { x, y } => {
+                menu.set_now_ms(tsc() / per_ms);
                 if let Some(o) = menu.pointer_down(x, y) {
                     return o;
                 }
@@ -196,7 +223,9 @@ fn run_menu(menu: &mut Menu, screen: &mut Screen, input: &mut Input) -> Outcome 
 pub fn run(scan: Scan, vols: alloc::vec::Vec<Vol>) -> ! {
     let mut status: Option<String> = None;
     let platform_lang = crate::scan::platform_lang();
+    let per_ms = tsc_per_ms();
     loop {
+        splash(3);
         let mut screen = match Screen::open() {
             Ok(s) => s,
             Err(e) => {
@@ -218,7 +247,7 @@ pub fn run(scan: Scan, vols: alloc::vec::Vec<Vol>) -> ! {
         menu.set_has_pointer(input.has_pointer());
         crate::trace::line(&format!("display {}x{}, language {}, input: {}", screen.w, screen.h, menu.language(), input.stats));
         crate::trace::flush();
-        let outcome = run_menu(&mut menu, &mut screen, &mut input);
+        let outcome = run_menu(&mut menu, &mut screen, &mut input, per_ms);
         match outcome {
             Outcome::Launch { entry, remember } => {
                 let e = menu.entry(entry).clone();
@@ -229,6 +258,9 @@ pub fn run(scan: Scan, vols: alloc::vec::Vec<Vol>) -> ! {
                         Err(err) => crate::trace::line(&format!("could not remember last entry: {}", err)),
                     }
                 }
+                // Only the background and a loading sign until the loader
+                // draws (no console text in between).
+                screen.present_plain(menu.launching_scene());
                 drop(menu);
                 drop(screen);
                 if let Err(err) = boot::launch(&e.kind, &vols) {

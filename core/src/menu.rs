@@ -22,6 +22,8 @@ use alloc::vec::Vec;
 pub const TICK_MS: u64 = 50;
 /// Config value for "start whatever was picked last time".
 pub const DEFAULT_LAST: &str = "@last";
+/// Two clicks on the same entry within this time start it.
+pub const DOUBLE_CLICK_MS: u64 = 500;
 const SELECTORS: usize = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -151,6 +153,9 @@ pub struct Menu {
     preview: bool,
     pub debug: bool,
     debug_line: String,
+    /// Milliseconds from the platform clock (set before pointer events).
+    now_ms: u64,
+    last_click: Option<(usize, u64)>,
 }
 
 impl Menu {
@@ -229,6 +234,8 @@ impl Menu {
             preview: opts.preview,
             debug: false,
             debug_line: String::new(),
+            now_ms: 0,
+            last_click: None,
         };
         let eff = m.effective_default();
         m.sel = m.visible().iter().position(|&i| m.scan.entries[m.items[i].entry].id == eff).unwrap_or(0);
@@ -260,6 +267,21 @@ impl Menu {
 
     pub fn set_debug_line(&mut self, line: String) {
         self.debug_line = line;
+    }
+
+    /// Current time in milliseconds, for double-click detection.
+    pub fn set_now_ms(&mut self, ms: u64) {
+        self.now_ms = ms;
+    }
+
+    /// The screen shown while the chosen system starts: the background and a
+    /// small loading indicator, nothing else.
+    pub fn launching_scene(&mut self) -> &Canvas {
+        self.scene.copy_from(&self.bg);
+        let t = self.themes[self.theme_idx].clone();
+        let (w, h) = (self.w as i32, self.h as i32);
+        draw_dots(&mut self.scene, w / 2, h / 2, self.s, t.accent, t.text_dim);
+        &self.scene
     }
 
     pub fn set_has_pointer(&mut self, v: bool) {
@@ -1016,11 +1038,14 @@ impl Menu {
     fn act(&mut self, a: Action) -> Option<Outcome> {
         match a {
             Action::Tile(k) => {
-                if self.sel == k {
+                let double = matches!(self.last_click, Some((lk, t)) if lk == k && self.now_ms.saturating_sub(t) <= DOUBLE_CLICK_MS);
+                if self.sel == k && double {
+                    self.last_click = None;
                     let vis = self.visible();
                     return Some(self.launch_item(vis[k]));
                 }
                 self.sel = k;
+                self.last_click = Some((k, self.now_ms));
             }
             Action::OpenSettings => self.open_settings(),
             Action::Cancel => self.cancel_settings(),
@@ -1321,4 +1346,40 @@ pub fn make_cursor(scale: usize) -> Image {
         }
     }
     img
+}
+
+/// Three dots, the first highlighted: a static "working on it" sign.
+fn draw_dots(c: &mut Canvas, cx: i32, cy: i32, s: f32, on: Color, off: Color) {
+    let r = (11.0 * s).max(5.0) as i32;
+    let gap = r * 4;
+    let pill = Rect::new(cx - gap - r * 3, cy - r * 3, gap * 2 + r * 6, r * 6);
+    c.fill_round_rect(pill, r * 3, Color::rgb(0, 0, 0).alpha(120));
+    for i in 0..3 {
+        let col = if i == 0 { on } else { off.alpha(150) };
+        c.fill_circle(cx + (i - 1) * gap, cy, r, col);
+    }
+}
+
+/// Loading screen while bootpick itself starts (before the menu exists):
+/// the theme gradient and a progress bar, `step` of `steps` done.
+pub fn splash(w: usize, h: usize, theme: &Theme, step: usize, steps: usize) -> Canvas {
+    let mut c = Canvas::new(w, h);
+    c.fill_gradient(Rect::new(0, 0, w as i32, h as i32), theme.bg0, theme.bg1);
+    let s = h as f32 / 1080.0;
+    let bw = (320.0 * s) as i32;
+    let bh = (8.0 * s).max(4.0) as i32;
+    let x = (w as i32 - bw) / 2;
+    let y = h as i32 / 2 - bh / 2;
+    c.fill_round_rect(Rect::new(x, y, bw, bh), bh / 2, theme.text_dim.alpha(70));
+    let done = (bw as usize * step.min(steps) / steps.max(1)) as i32;
+    if done > 0 {
+        c.fill_round_rect(Rect::new(x, y, done.max(bh), bh), bh / 2, theme.accent);
+    }
+    c
+}
+
+/// The theme saved in bootpick.conf (for the loading screen).
+pub fn saved_theme(storage: &mut dyn Storage) -> Theme {
+    let cfg = storage.read_string(paths::CONF).map(|t| Config::parse(&t)).unwrap_or_default();
+    cfg.all_themes().into_iter().find(|t| t.id == cfg.theme).unwrap_or_else(|| crate::config::builtin_themes().remove(0))
 }

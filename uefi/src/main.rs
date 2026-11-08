@@ -20,6 +20,7 @@ fn main() -> Status {
     let _ = uefi::helpers::init();
     // Firmware watchdogs reboot after ~5 minutes in a menu; disable it.
     let _ = uefi::boot::set_watchdog_timer(0, 0x1_0000, None);
+    shell::splash(0);
     trace::line("==== bootpick start");
     trace::line(&alloc::format!(
         "firmware: {} rev {:#x}, UEFI {}",
@@ -28,7 +29,9 @@ fn main() -> Status {
         uefi::system::uefi_revision()
     ));
     boot::load_drivers();
+    shell::splash(1);
     let (scan, vols) = scan::scan();
+    shell::splash(2);
     trace::line(&alloc::format!("scan: {} volumes, {} entries", scan.volumes.len(), scan.entries.len()));
     for (i, v) in scan.volumes.iter().enumerate() {
         trace::line(&alloc::format!("  volume {}: {} ({})", i, v.key, v.disk));
