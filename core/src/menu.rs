@@ -275,12 +275,12 @@ impl Menu {
     }
 
     /// The screen shown while the chosen system starts: the background and a
-    /// small loading indicator, nothing else.
-    pub fn launching_scene(&mut self) -> &Canvas {
+    /// small loading indicator (`filled` of its three dots lit), nothing else.
+    pub fn launching_scene(&mut self, filled: usize) -> &Canvas {
         self.scene.copy_from(&self.bg);
         let t = self.themes[self.theme_idx].clone();
         let (w, h) = (self.w as i32, self.h as i32);
-        draw_dots(&mut self.scene, w / 2, h / 2, self.s, t.accent, t.text_dim);
+        draw_dots(&mut self.scene, w / 2, h / 2, self.s, filled, t.accent, t.text_dim);
         &self.scene
     }
 
@@ -1348,14 +1348,14 @@ pub fn make_cursor(scale: usize) -> Image {
     img
 }
 
-/// Three dots, the first highlighted: a static "working on it" sign.
-fn draw_dots(c: &mut Canvas, cx: i32, cy: i32, s: f32, on: Color, off: Color) {
+/// Three dots, the first `filled` highlighted: a "working on it" sign.
+fn draw_dots(c: &mut Canvas, cx: i32, cy: i32, s: f32, filled: usize, on: Color, off: Color) {
     let r = (11.0 * s).max(5.0) as i32;
     let gap = r * 4;
     let pill = Rect::new(cx - gap - r * 3, cy - r * 3, gap * 2 + r * 6, r * 6);
     c.fill_round_rect(pill, r * 3, Color::rgb(0, 0, 0).alpha(120));
     for i in 0..3 {
-        let col = if i == 0 { on } else { off.alpha(150) };
+        let col = if (i as usize) < filled { on } else { off.alpha(150) };
         c.fill_circle(cx + (i - 1) * gap, cy, r, col);
     }
 }

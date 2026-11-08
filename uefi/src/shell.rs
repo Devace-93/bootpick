@@ -260,7 +260,11 @@ pub fn run(scan: Scan, vols: alloc::vec::Vec<Vol>) -> ! {
                 }
                 // Only the background and a loading sign until the loader
                 // draws (no console text in between).
-                screen.present_plain(menu.launching_scene());
+                // The dots fill one by one, then the system takes over.
+                for filled in 1..=3 {
+                    screen.present_plain(menu.launching_scene(filled));
+                    uboot::stall(core::time::Duration::from_millis(180));
+                }
                 drop(menu);
                 drop(screen);
                 if let Err(err) = boot::launch(&e.kind, &vols) {
