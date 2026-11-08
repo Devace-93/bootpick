@@ -96,6 +96,7 @@ fn load(staging: &str, uid: u32) -> Result<LoadReply, String> {
         let _ = chown(staging.join("EFI"), Some(uid), None);
     }
     let hs = host::scan_host(&parts, &RootOverride::new());
+    menus::upgrade(&Env::Real { parts: &parts });
     Ok(LoadReply {
         esp_label: host::disk_label(&esp),
         esp_device: esp.path.clone(),

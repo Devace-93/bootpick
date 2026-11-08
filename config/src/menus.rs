@@ -52,6 +52,10 @@ pub struct LoaderMenu {
     /// GRUB hidden by bootpick: also hidden after an interrupted start.
     #[serde(default)]
     pub hide_always: bool,
+    /// Unticked GRUB block from an older bootpick that misses the system's
+    /// own grubenv (see `upgrade`).
+    #[serde(skip)]
+    pub outdated: bool,
 }
 
 impl LoaderMenu {
@@ -290,20 +294,22 @@ fn grub_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
             seen.push(uuid.clone());
             let id = format!("grub:{}", uuid);
             let Some((root, label, _g)) = env.fs_by_uuid(&uuid, false) else {
-                out.push(LoaderMenu { id, kind: MenuKind::Grub, name: vendor.clone(), location: esp.label.clone(), visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable), recordfail: false, hide_always: false });
+                out.push(LoaderMenu { id, kind: MenuKind::Grub, name: vendor.clone(), location: esp.label.clone(), visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable), recordfail: false, hide_always: false, outdated: false });
                 continue;
             };
             let dir = root.join(&rel);
             let name = host::detect_grub(&root, &rel, &|spec| env.detect(spec)).map(|d| d.name).unwrap_or_else(|| vendor.clone());
             let Ok(cfg) = fs::read_to_string(dir.join("grub.cfg")) else {
-                out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable), recordfail: false, hide_always: false });
+                out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable), recordfail: false, hide_always: false, outdated: false });
                 continue;
             };
             let custom = fs::read_to_string(dir.join("custom.cfg")).ok();
             let managed = custom.as_deref().map(|c| c.contains(BEGIN)).unwrap_or(false);
             let block = custom.as_deref().map(block_of).unwrap_or_default();
             let read_rf = |d: &Path| fs::read_to_string(d.join("grubenv")).map(|e| grubenv_recordfail(&e)).unwrap_or(false);
-            let ext = if block.contains("bp_env") { os_root_uuid(&root, &cfg, &uuid).and_then(|u| env.fs_by_uuid(&u, false)) } else { None };
+            let os_root = os_root_uuid(&root, &cfg, &uuid);
+            let outdated = managed && !block.contains("bp_env") && block.contains("recordfail") && os_root.is_some();
+            let ext = if block.contains("bp_env") { os_root.and_then(|u| env.fs_by_uuid(&u, false)) } else { None };
             let recordfail = match &ext {
                 Some((r, _, _)) => read_rf(&r.join("boot/grub")),
                 None => read_rf(&dir),
@@ -312,7 +318,7 @@ fn grub_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
             let (visible, timeout) = grub_state(&cfg, custom.as_deref(), recordfail);
             let problem = if sources_custom(&cfg) { None } else { Some(Problem::NoCustomCfg) };
             let hide_always = managed && !block.contains("recordfail");
-            out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible, timeout, managed, problem, recordfail, hide_always });
+            out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible, timeout, managed, problem, recordfail, hide_always, outdated });
         }
     }
 }
@@ -340,13 +346,13 @@ fn set_grub(env: &Env, uuid: &str, visible: bool, always: bool) -> Result<(), St
                 let cfg = fs::read_to_string(root.join(&rel).join("grub.cfg")).unwrap_or_default();
                 let os_root = if always { None } else { os_root_uuid(&root, &cfg, uuid) };
                 // The system's own grubenv must exist for GRUB to use it.
-                let os_root = os_root.filter(|u| match env.fs_by_uuid(u, true) {
-                    Some((r, _, _g)) => {
-                        let env_path = r.join("boot/grub/grubenv");
-                        env_path.exists() || (r.join("boot/grub").is_dir() && fs::write(&env_path, empty_grubenv()).is_ok())
+                if let Some(u) = &os_root {
+                    let (r, _, _g) = env.fs_by_uuid(u, true).ok_or("cannot open the system's partition to track interrupted starts")?;
+                    let env_path = r.join("boot/grub/grubenv");
+                    if !env_path.exists() {
+                        fs::write(&env_path, empty_grubenv()).map_err(|e| format!("{}: {}", env_path.display(), e))?;
                     }
-                    None => false,
-                });
+                }
                 new.push_str(&grub_block_for(always, os_root.as_deref()));
             }
             if new.trim().is_empty() {
@@ -429,7 +435,7 @@ fn sd_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
         let file_value = loader_timeout(&conf);
         let value = efivar.clone().or(file_value);
         let (visible, timeout) = sd_state(value.as_deref());
-        out.push(LoaderMenu { id: format!("sd:{}", esp.key), kind: MenuKind::SystemdBoot, name: sd_title(&mut st), location: esp.label.clone(), visible, timeout, managed: conf.contains(SD_MARK), problem: None, recordfail: false, hide_always: false });
+        out.push(LoaderMenu { id: format!("sd:{}", esp.key), kind: MenuKind::SystemdBoot, name: sd_title(&mut st), location: esp.label.clone(), visible, timeout, managed: conf.contains(SD_MARK), problem: None, recordfail: false, hide_always: false, outdated: false });
     }
 }
 
@@ -502,6 +508,21 @@ pub fn set(env: &Env, id: &str, visible: bool, always: bool) -> Result<(), Strin
         let _ = std::process::Command::new("sync").status();
     }
     r
+}
+
+/// Rewrites "unticked" GRUB blocks written before bootpick tracked
+/// interrupted starts in the system's own grubenv (GRUB kept on an ESP).
+pub fn upgrade(env: &Env) -> usize {
+    let mut n = 0;
+    for m in scan(env) {
+        if m.kind != MenuKind::Grub || !m.managed || m.hide_always || !m.outdated {
+            continue;
+        }
+        if set(env, &m.id, false, false).is_ok() {
+            n += 1;
+        }
+    }
+    n
 }
 
 /// Shows again every menu bootpick hid (on disable and uninstall).
@@ -657,7 +678,13 @@ fi
         ov.insert("U2".into(), os.clone());
         let env = Env::Demo { dirs: &dirs, overrides: &ov };
 
-        set(&env, "grub:U1", false, false).unwrap();
+        // A block from an older bootpick is upgraded when the app loads.
+        let old = format!("{}\nif [ \"${{recordfail}}\" != 1 ]; then\n  set timeout_style=hidden\n  set timeout=0\nfi\n{}\n", BEGIN, END);
+        fs::write(gfs.join("EFI/ubuntu/grub/custom.cfg"), old).unwrap();
+        assert!(scan(&env)[0].outdated);
+        assert_eq!(upgrade(&env), 1);
+        assert!(!scan(&env)[0].outdated);
+        assert_eq!(upgrade(&env), 0);
         let custom = fs::read_to_string(gfs.join("EFI/ubuntu/grub/custom.cfg")).unwrap();
         assert!(custom.contains("--set=bp_root U2") && custom.contains("save_env -f"), "{}", custom);
         let env_file = fs::read_to_string(os.join("boot/grub/grubenv")).unwrap();
