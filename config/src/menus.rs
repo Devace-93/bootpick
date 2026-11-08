@@ -666,7 +666,7 @@ fi
         fs::create_dir_all(os.join("etc")).unwrap();
         fs::write(os.join("etc/os-release"), "ID=elementary\nNAME=\"elementary OS\"\n").unwrap();
         fs::write(esp.join("EFI/ubuntu/grub.cfg"), "search.fs_uuid U1 root\nset prefix=($root)'/EFI/ubuntu/grub'\nconfigfile $prefix/grub.cfg\n").unwrap();
-        let cfg = format!("{}menuentry 'elementary' {{\n  linux /vmlinuz root=UUID=U2 ro\n}}\n", UBUNTU_HEADER);
+        let cfg = format!("{}menuentry 'elementary' {{\n\tlinux\t/boot/vmlinuz root=UUID=U2 ro\n}}\n", UBUNTU_HEADER);
         fs::write(gfs.join("EFI/ubuntu/grub/grub.cfg"), cfg).unwrap();
         // Stale flag GRUB left on the ESP: the system never clears it there.
         fs::write(gfs.join("EFI/ubuntu/grub/grubenv"), "# GRUB Environment Block\nrecordfail=1\n").unwrap();

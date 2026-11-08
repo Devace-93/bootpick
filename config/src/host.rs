@@ -451,9 +451,10 @@ pub fn grub_prefix(cfg: &str) -> String {
 /// `root=...` of the first `linux` line in a GRUB menu: the system it boots.
 pub fn grub_linux_root(cfg: &str) -> Option<String> {
     for line in cfg.lines() {
-        let l = line.trim_start();
-        if l.starts_with("linux ") || l.starts_with("linuxefi ") {
-            return l.split_whitespace().find_map(|t| t.strip_prefix("root=")).map(|s| s.to_string());
+        // grub-mkconfig separates the command from its arguments with a tab.
+        let mut words = line.split_whitespace();
+        if matches!(words.next(), Some("linux" | "linuxefi")) {
+            return words.find_map(|t| t.strip_prefix("root=")).map(|s| s.to_string());
         }
     }
     None
