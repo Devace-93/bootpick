@@ -512,17 +512,15 @@ pub fn set(env: &Env, id: &str, visible: bool, always: bool) -> Result<(), Strin
 
 /// Rewrites "unticked" GRUB blocks written before bootpick tracked
 /// interrupted starts in the system's own grubenv (GRUB kept on an ESP).
-pub fn upgrade(env: &Env) -> usize {
-    let mut n = 0;
-    for m in scan(env) {
-        if m.kind != MenuKind::Grub || !m.managed || m.hide_always || !m.outdated {
-            continue;
-        }
-        if set(env, &m.id, false, false).is_ok() {
-            n += 1;
-        }
-    }
-    n
+pub fn upgrade(env: &Env) -> Vec<(String, Result<(), String>)> {
+    scan(env)
+        .into_iter()
+        .filter(|m| m.kind == MenuKind::Grub && m.managed && !m.hide_always && m.outdated)
+        .map(|m| {
+            let r = set(env, &m.id, false, false);
+            (m.name, r)
+        })
+        .collect()
 }
 
 /// Shows again every menu bootpick hid (on disable and uninstall).
@@ -682,9 +680,9 @@ fi
         let old = format!("{}\nif [ \"${{recordfail}}\" != 1 ]; then\n  set timeout_style=hidden\n  set timeout=0\nfi\n{}\n", BEGIN, END);
         fs::write(gfs.join("EFI/ubuntu/grub/custom.cfg"), old).unwrap();
         assert!(scan(&env)[0].outdated);
-        assert_eq!(upgrade(&env), 1);
+        assert_eq!(upgrade(&env).len(), 1);
         assert!(!scan(&env)[0].outdated);
-        assert_eq!(upgrade(&env), 0);
+        assert!(upgrade(&env).is_empty());
         let custom = fs::read_to_string(gfs.join("EFI/ubuntu/grub/custom.cfg")).unwrap();
         assert!(custom.contains("--set=bp_root U2") && custom.contains("save_env -f"), "{}", custom);
         let env_file = fs::read_to_string(os.join("boot/grub/grubenv")).unwrap();

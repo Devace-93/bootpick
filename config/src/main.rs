@@ -2,6 +2,7 @@
 //!
 //!   bootpick-config                    the settings window (asks for authorization once)
 //!   bootpick-config --helper           privileged helper (started by the app through pkexec)
+//!   bootpick-config --upgrade-menus    rewrite GRUB blocks from an older bootpick (root; install.sh)
 //!   bootpick-config --demo DIR[:LABEL][,DIR2[:LABEL]] [--demo-root UUID=DIR]...
 //!                                      use plain directories as EFI volumes (no root)
 //!   bootpick-config --screenshot OUT.png [--open-theme-editor] [--preview-lang-menu]
@@ -22,6 +23,9 @@ fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--helper") {
         helper::run();
+    }
+    if args.iter().any(|a| a == "--upgrade-menus") {
+        helper::upgrade_menus();
     }
     let mut mode = app::Mode::Real;
     let mut screenshot = None;

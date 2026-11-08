@@ -205,6 +205,18 @@ fn uninstall() -> Result<String, String> {
     Ok("bootpick was removed. Your previous boot loader starts again.".into())
 }
 
+/// `bootpick-config --upgrade-menus` (root, run by install.sh): rewrites
+/// GRUB blocks written by an older bootpick.
+pub fn upgrade_menus() -> ! {
+    for (name, r) in menus::upgrade(&Env::Real { parts: &host::partitions() }) {
+        match r {
+            Ok(()) => println!("updated the hidden GRUB menu of {}", name),
+            Err(e) => println!("could not update the hidden GRUB menu of {}: {}", name, e),
+        }
+    }
+    std::process::exit(0)
+}
+
 pub fn run() -> ! {
     let uid = match caller_uid() {
         Some(u) => u,

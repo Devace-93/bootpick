@@ -90,6 +90,7 @@ if [ "$APP" = 1 ]; then
     echo "settings app not built (tools/build.sh); skipping it"
   else
     install -m 0755 "$CONFIG_BIN" "$APP_BIN"
+    "$APP_BIN" --upgrade-menus || true
     install -m 0644 "$ROOT/packaging/bootpick-settings.desktop" "$APP_DESKTOP"
     install -D -m 0644 "$ROOT/packaging/bootpick.svg" "$APP_ICON"
     command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
