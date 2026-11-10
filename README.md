@@ -1,5 +1,7 @@
 # bootpick `beta`
 
+Website: <https://bootpick.3m4.net>
+
 > **Status: beta.** Tested in QEMU/OVMF and on one real machine so far: an
 > AMD Ryzen 4000 laptop with Insyde UEFI firmware, NVMe + SATA disks, booting
 > Windows, Pop!_OS (systemd-boot), Ubuntu and elementary OS (shim/GRUB, on
