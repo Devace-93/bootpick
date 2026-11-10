@@ -112,6 +112,13 @@ boot entry first in the boot order, installs `bootpick-config` with a
 desktop entry, and opens it. GRUB, systemd-boot and the Windows boot manager
 stay where they are; the firmware boot menu can still start them directly.
 
+If bootpick is already installed anywhere on the computer (for example from
+another Linux on the same machine), the installer updates that copy in place
+instead of adding a second one, and asks whether to keep its settings
+(backgrounds, logos, choices) or reset them to the defaults. `--keep` and
+`--reset` answer that question without asking. Install the app from each
+Linux you want to change the settings from: all of them edit the same copy.
+
 ### The settings app
 
 `bootpick-config` runs as your user and asks for authorization once

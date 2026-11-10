@@ -10,10 +10,18 @@
 #   sudo ./install.sh --esp /mnt/esp  # another mounted ESP
 #   sudo ./install.sh --no-boot-entry # copy files only
 #   sudo ./install.sh --no-app        # boot menu only, no desktop app
+#   sudo ./install.sh --keep          # already installed: keep its settings (default)
+#   sudo ./install.sh --reset         # already installed: factory settings
 #   sudo ./install.sh --uninstall     # remove everything
+#
+# When bootpick is already installed on any EFI partition (e.g. from another
+# system on this computer), that copy is updated in place and you are asked
+# whether to keep its settings (backgrounds, logos, choices) or reset them.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 ESP="/boot/efi"
+ESP_GIVEN=0
+MODE=""   # keep | reset (asked when empty and already installed)
 BOOT_ENTRY=1
 APP=1
 UNINSTALL=0
@@ -23,7 +31,9 @@ APP_DESKTOP=/usr/share/applications/bootpick-settings.desktop
 APP_ICON=/usr/share/icons/hicolor/scalable/apps/bootpick.svg
 while [ $# -gt 0 ]; do
   case "$1" in
-    --esp) ESP="$2"; shift 2 ;;
+    --esp) ESP="$2"; ESP_GIVEN=1; shift 2 ;;
+    --keep) MODE=keep; shift ;;
+    --reset) MODE=reset; shift ;;
     --no-boot-entry) BOOT_ENTRY=0; shift ;;
     --no-app) APP=0; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
@@ -31,6 +41,35 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }
+
+# An existing install anywhere on this computer: the partition the 'bootpick'
+# boot entry points to, else any FAT partition holding \EFI\bootpick.
+TMP_MNT=""
+cleanup() { if [ -n "$TMP_MNT" ]; then umount "$TMP_MNT" 2>/dev/null || true; rmdir "$TMP_MNT" 2>/dev/null || true; fi; }
+trap cleanup EXIT
+has_bootpick() { # $1 = device; prints its mount point when bootpick is there
+  local mp; mp="$(findmnt -no TARGET "$1" | head -1)"
+  if [ -z "$mp" ]; then
+    local t; t="$(mktemp -d)"
+    mount "$1" "$t" 2>/dev/null || { rmdir "$t"; return 1; }
+    if [ -f "$t/EFI/bootpick/bootpick.efi" ]; then echo "tmp:$t"; return 0; fi
+    umount "$t"; rmdir "$t"; return 1
+  fi
+  [ -f "$mp/EFI/bootpick/bootpick.efi" ] && echo "$mp"
+}
+if [ "$ESP_GIVEN" = 0 ]; then
+  ENTRY_PU="$(efibootmgr -v 2>/dev/null | grep -iE "^Boot[0-9A-F]{4}\*? ${LABEL}\b" | grep -oiE 'HD\([0-9]+,GPT,[0-9a-f-]+' | head -1 | cut -d, -f3)"
+  CANDS=""
+  [ -n "$ENTRY_PU" ] && CANDS="$(lsblk -nrpo NAME,PARTUUID | awk -v u="${ENTRY_PU,,}" 'tolower($2)==u {print $1}')"
+  CANDS="$CANDS $(lsblk -nrpo NAME,FSTYPE | awk '$2=="vfat" {print $1}')"
+  for dev in $CANDS; do
+    if mp="$(has_bootpick "$dev")"; then
+      case "$mp" in tmp:*) mp="${mp#tmp:}"; TMP_MNT="$mp" ;; esac
+      FOUND_DEV="$dev"; ESP="$mp"
+      break
+    fi
+  done
+fi
 mountpoint -q "$ESP" || { echo "$ESP is not a mount point" >&2; exit 1; }
 # Boot#### numbers whose label is exactly $LABEL. efibootmgr prints
 # "Boot0008* bootpick<TAB>HD(...)" (path after a tab) or just the label.
@@ -57,14 +96,37 @@ fi
 for d in icons flags fonts; do
   [ -d "$ROOT/esp/EFI/bootpick/$d" ] || { echo "assets missing: run tools/build.sh first" >&2; exit 1; }
 done
+FRESH=1
+if [ -f "$DEST/bootpick.conf" ]; then
+  FRESH=0
+  echo "bootpick is already installed on ${FOUND_DEV:-$(findmnt -no SOURCE "$ESP")} ($DEST)."
+  if [ -z "$MODE" ]; then
+    MODE=keep
+    if [ -r /dev/tty ]; then
+      printf '  [k] keep its current settings (backgrounds, logos, choices)\n  [r] reset to factory settings\nChoice [k]: ' > /dev/tty
+      read -r ans < /dev/tty || ans=""
+      case "${ans,,}" in r|reset) MODE=reset ;; esac
+    fi
+  fi
+  if [ "$MODE" = reset ]; then
+    rm -rf "$DEST"
+    FRESH=1
+    echo "settings reset to factory defaults"
+  else
+    echo "keeping the current settings"
+  fi
+fi
 mkdir -p "$DEST/icons" "$DEST/backgrounds" "$DEST/drivers" "$DEST/flags" "$DEST/fonts"
 cp "$EFI" "$DEST/bootpick.efi"
 cp "$ROOT"/esp/EFI/bootpick/icons/*.bmp "$DEST/icons/"
 cp "$ROOT"/esp/EFI/bootpick/flags/*.bmp "$DEST/flags/"
 cp "$ROOT"/esp/EFI/bootpick/fonts/*.ttf "$DEST/fonts/"
-cp "$ROOT"/esp/EFI/bootpick/backgrounds/*.bmp "$DEST/backgrounds/" 2>/dev/null || true
 cp "$ROOT"/assets/drivers/*.efi "$DEST/drivers/" 2>/dev/null || true
-[ -f "$DEST/bootpick.conf" ] || cp "$ROOT/bootpick.conf.example" "$DEST/bootpick.conf"
+if [ "$FRESH" = 1 ]; then
+  # Bundled backgrounds only on a fresh install: the user may have removed some.
+  cp "$ROOT"/esp/EFI/bootpick/backgrounds/*.bmp "$DEST/backgrounds/" 2>/dev/null || true
+  cp "$ROOT/bootpick.conf.example" "$DEST/bootpick.conf"
+fi
 sync
 echo "boot menu installed in $DEST"
 
