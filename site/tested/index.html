@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en" data-page="tested">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bootpick — Tested computers and systems</title>
+<meta name="description" content="Computers, firmware and operating systems bootpick has been tested on: firmware vendor, disks, boot loaders and results.">
+<link rel="canonical" href="https://bootpick.3m4.net/tested/">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0284c7">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="bootpick">
+<meta property="og:title" content="bootpick — Tested computers and systems">
+<meta property="og:description" content="Computers, firmware and operating systems bootpick has been tested on.">
+<meta property="og:url" content="https://bootpick.3m4.net/tested/">
+<meta property="og:image" content="https://bootpick.3m4.net/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="../icon.svg">
+<script>
+  // Apply the saved theme override before first paint to avoid a flash.
+  try {
+    const theme = localStorage.getItem('3m4.theme');
+    if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+  } catch (e) {}
+</script>
+<link rel="stylesheet" href="../style.css">
+<style>
+  .page { padding-top: 56px; padding-bottom: 24px; }
+  .page h1 { font-size: clamp(28px, 4.5vw, 42px); line-height: 1.1; margin: 0 0 12px; letter-spacing: -0.02em; }
+  .ok { color: var(--ok); font-weight: 600; white-space: nowrap; }
+  .meta { color: var(--fg-muted); font-size: 14px; }
+</style>
+<script src="https://metrics.3m4.net/m.js" data-key="metrics_pub_OiicdFxKsFjJmqiQndk4afrNDEcoHNZL" defer></script>
+<script src="https://oops.3m4.net/o.js" data-key="oops_pub_1VTlQ1X-vb_dtvJ0mjvNyHWsTnKVTIP7" data-env="production" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../">
+      <svg viewBox="0 0 128 128" aria-hidden="true"><rect x="6" y="6" width="116" height="116" rx="26" fill="none" stroke="currentColor" stroke-width="10"/><rect x="30" y="34" width="30" height="30" rx="7" fill="var(--accent)"/><rect x="68" y="34" width="30" height="30" rx="7" fill="currentColor" opacity=".3"/><rect x="30" y="72" width="30" height="30" rx="7" fill="currentColor" opacity=".3"/><rect x="68" y="72" width="30" height="30" rx="7" fill="currentColor" opacity=".3"/></svg>
+      bootpick <span class="beta">beta</span>
+    </a>
+    <nav>
+      <a href="../#features" class="hide-sm" data-i18n="navFeatures">Features</a>
+      <a href="../#install" class="hide-sm" data-i18n="navInstall">Install</a>
+      <a href="../#help" class="hide-sm" data-i18n="navHelp">Help</a>
+      <a href="https://github.com/Devace-93/bootpick" class="hide-sm">GitHub</a>
+      <div class="top-controls">
+        <button id="theme-toggle" type="button" aria-label="Theme">🌙</button>
+        <div id="lang-sel"></div>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap page">
+    <h1 data-i18n="testedTitle">Tested computers and systems</h1>
+    <p class="sub" data-i18n="testedLede">Every computer and operating system bootpick has actually been run on, with the details that matter when something does not work: firmware, disks, boot loaders and how each system is started.</p>
+  </div>
+
+  <section>
+    <div class="wrap">
+      <h2 data-i18n="testedMachines">Computers</h2>
+      <div class="tbl">
+        <table>
+          <tr><th data-i18n="thMachine">Machine</th><th data-i18n="thFirmware">Firmware</th><th data-i18n="thDisks">Disks</th><th data-i18n="thStatus">Status</th><th data-i18n="thNotes">Notes</th></tr>
+          <tr><td data-i18n="mLaptop">Laptop, AMD Ryzen 7 4800H</td><td>Insyde UEFI 2.7</td><td>NVMe + SATA, GPT</td><td class="ok" data-i18n="stWorks">Works</td><td data-i18n-html="nLaptop">Mouse and touchpad through the firmware's own pointer drivers. Secure Boot off. The HDMI output stays dark until the operating system starts: the firmware only drives the built-in screen.</td></tr>
+          <tr><td>QEMU q35</td><td>OVMF (EDK2)</td><td data-i18n="dQemu">FAT folders as disks</td><td class="ok" data-i18n="stWorks">Works</td><td data-i18n-html="nQemu">Stock OVMF has no USB mouse driver; bootpick loads the bundled EDK2 ones from <code>\EFI\bootpick\drivers\</code>.</td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2 data-i18n="testedSystems">Systems started by bootpick</h2>
+      <div class="tbl">
+        <table>
+          <tr><th data-i18n="thSystem">System</th><th data-i18n="thLoader">Loader</th><th data-i18n="thStatus">Status</th><th data-i18n="thNotes">Notes</th></tr>
+          <tr><td>Windows</td><td>Windows Boot Manager</td><td class="ok" data-i18n="stWorks">Works</td><td data-i18n="nWindows">Started directly; no menu in between.</td></tr>
+          <tr><td>Pop!_OS 24.04 (COSMIC)</td><td>systemd-boot 249</td><td class="ok" data-i18n="stWorks">Works</td><td data-i18n-html="nPop">The entry is passed with <code>LoaderEntryOneShot</code>; the systemd-boot menu can be hidden from the app.</td></tr>
+          <tr><td data-i18n="sysUbuntu">Ubuntu (encrypted disk)</td><td>shim + GRUB</td><td class="ok" data-i18n="stWorks">Works</td><td data-i18n="nUbuntu">The system disk is encrypted; GRUB lives on a separate, unencrypted /boot partition, so its menu can still be hidden.</td></tr>
+          <tr><td>elementary OS</td><td>shim + GRUB</td><td class="ok" data-i18n="stWorks">Works</td><td data-i18n="nElementary">Installed in a folder called "ubuntu" on its own EFI partition; bootpick shows its real name and logo. GRUB kept on the EFI partition, hidden from the app as well.</td></tr>
+        </table>
+      </div>
+      <p class="sub" style="margin-top:18px" data-i18n="testedApp">The settings app was used on Pop!_OS 24.04 (COSMIC, Wayland) and on elementary OS, both editing the same installation.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <p class="sub" data-i18n-html="testedMore">Tried it on something else? <a href="https://github.com/Devace-93/bootpick/issues/new">Open an issue</a> with the computer model, firmware vendor (shown in <code>\EFI\bootpick\bootpick.log</code>), the systems you start and whether the mouse worked, and it will be added here.</p>
+      <p class="meta" data-i18n="testedUpdated">Last updated: 10 November 2026</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="links">
+      <a href="https://www.linkedin.com/in/enrique-magallon/" target="_blank" rel="noopener noreferrer"><span data-i18n="madeBy">Made by</span> Enrique Magallón</a>
+      <a href="https://github.com/Devace-93/bootpick" data-i18n="source">Source</a>
+      <a href="https://info.3m4.net">info.3m4.net</a>
+    </p>
+    <p>bootpick · MIT</p>
+  </div>
+</footer>
+
+<script src="../i18n.js"></script>
+<script>BootpickI18n.init();</script>
+</body>
+</html>

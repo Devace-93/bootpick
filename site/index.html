@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bootpick — a boot menu you can click</title>
+<meta name="description" content="bootpick is a mouse-driven, themeable UEFI boot menu for computers with several operating systems: big icons, wallpapers, 34 languages and a desktop settings app. Open source, written in Rust.">
+<link rel="canonical" href="https://bootpick.3m4.net/">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0284c7">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="bootpick">
+<meta property="og:title" content="bootpick — a boot menu you can click">
+<meta property="og:description" content="A mouse-driven, themeable UEFI boot menu for computers with several operating systems. Big icons, wallpapers, 34 languages, a desktop settings app.">
+<meta property="og:url" content="https://bootpick.3m4.net/">
+<meta property="og:image" content="https://bootpick.3m4.net/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="bootpick — a boot menu you can click">
+<meta name="twitter:description" content="A mouse-driven, themeable UEFI boot menu for computers with several operating systems.">
+<meta name="twitter:image" content="https://bootpick.3m4.net/og-image.png">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<script>
+  // Apply the saved theme override before first paint to avoid a flash.
+  // Shared key with the other 3m4.net pages.
+  try {
+    const theme = localStorage.getItem('3m4.theme');
+    if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+  } catch (e) {}
+</script>
+<link rel="stylesheet" href="style.css">
+<!-- retro feedback widget (bug reports, feedback, feature requests). The project key is public by design; it follows 3m4.theme / 3m4.lang. -->
+<script src="https://retro.3m4.net/widget.js" data-project-key="retro_pub_j2QmjNJlqdsqKggZVrDSzuRmM9dBihtj" defer></script>
+<!-- metrics web analytics (page views, visitors, referrers, devices; cookie-less). The project key is public by design. -->
+<script src="https://metrics.3m4.net/m.js" data-key="metrics_pub_OiicdFxKsFjJmqiQndk4afrNDEcoHNZL" defer></script>
+<!-- oops error tracking (uncaught errors, rejected promises, breadcrumbs). The project key is public by design. -->
+<script src="https://oops.3m4.net/o.js" data-key="oops_pub_1VTlQ1X-vb_dtvJ0mjvNyHWsTnKVTIP7" data-env="production" defer></script>
+<!-- payments "Buy me a beer" buttons (pay.js renders one button per tag into its data-mount; both share window.m4pay).
+     The label is localized by i18n.js (key supportLabel): it rewrites data-label on these tags and pay.js re-renders on
+     <html lang> changes. pay.js hides itself for viewers who are not allowed to donate, so the mounts may stay empty. -->
+<script id="support-pay" src="https://payments.3m4.net/pay.js" data-app="bootpick" data-kind="donate" data-currency="usd" data-amount="500" data-label="Buy me a beer 🍺" data-mount="#support" defer></script>
+<script id="support-pay-hero" src="https://payments.3m4.net/pay.js" data-app="bootpick" data-kind="donate" data-currency="usd" data-amount="500" data-label="Buy me a beer 🍺" data-mount="#support-hero" defer></script>
+<!-- payments supporters list (footer): opted-in donors plus public GitHub sponsors. pay.js renders nothing while the list is empty. -->
+<script id="supporters-pay" src="https://payments.3m4.net/pay.js" data-app="bootpick" data-kind="supporters" data-limit="24" data-label="Thanks to our supporters" data-mount="#supporters" defer></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#">
+      <svg viewBox="0 0 128 128" aria-hidden="true"><rect x="6" y="6" width="116" height="116" rx="26" fill="none" stroke="currentColor" stroke-width="10"/><rect x="30" y="34" width="30" height="30" rx="7" fill="var(--accent)"/><rect x="68" y="34" width="30" height="30" rx="7" fill="currentColor" opacity=".3"/><rect x="30" y="72" width="30" height="30" rx="7" fill="currentColor" opacity=".3"/><rect x="68" y="72" width="30" height="30" rx="7" fill="currentColor" opacity=".3"/></svg>
+      bootpick <span class="beta">beta</span>
+    </a>
+    <nav>
+      <a href="#features" class="hide-sm" data-i18n="navFeatures">Features</a>
+      <a href="#install" class="hide-sm" data-i18n="navInstall">Install</a>
+      <a href="#app" class="hide-sm" data-i18n="navApp">Settings app</a>
+      <a href="#help" class="hide-sm" data-i18n="navHelp">Help</a>
+      <a href="tested/" class="hide-sm" data-i18n="navTested">Tested on</a>
+      <a href="https://github.com/Devace-93/bootpick" class="hide-sm">GitHub</a>
+      <div class="top-controls">
+        <button id="theme-toggle" type="button" aria-label="Theme">🌙</button>
+        <div id="lang-sel"></div>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <h1><span data-i18n="heroTitle">A boot menu you can click,</span><br><span class="accent" data-i18n="heroTitleAccent">for every system on your PC.</span></h1>
+    <p class="lead" data-i18n="heroLede">
+      bootpick replaces the text menu of GRUB and systemd-boot with big icons, a wallpaper and the mouse.
+      It finds Windows and every Linux on all your disks by itself, starts the one you pick, and lets you rename,
+      hide and reorder them from the menu or from a desktop app. Your existing boot loaders stay where they are.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="#install" data-i18n="ctaInstall">Install</a>
+      <a class="btn" href="https://github.com/Devace-93/bootpick" data-i18n="ctaSource">Source on GitHub</a>
+      <span id="support-hero"></span>
+    </div>
+    <div class="pills">
+      <span class="pill">UEFI x86_64</span>
+      <span class="pill">Windows · Linux · systemd-boot · GRUB</span>
+      <span class="pill" data-i18n="pillMouse">Mouse, touchpad &amp; keyboard</span>
+      <span class="pill" data-i18n="pillLangs">34 languages</span>
+      <span class="pill">Rust · MIT</span>
+    </div>
+    <figure class="shot hero-shot">
+      <img src="img/menu.webp" width="1280" height="800" alt="bootpick main screen: Ubuntu, Windows, Pop!_OS and a second Ubuntu as big icons over a nebula wallpaper" data-i18n-alt="altMenu">
+      <figcaption data-i18n="capMenu">The main screen: one icon per system, the second Ubuntu labelled by its disk. Double-click or Enter starts it.</figcaption>
+    </figure>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <h2 data-i18n="featuresTitle">What it does</h2>
+      <p class="sub" data-i18n="featuresSub">Everything happens before any operating system loads, in the computer's own UEFI firmware.</p>
+      <div class="grid">
+        <div class="card"><div class="g" data-i18n="f1k">Finds everything</div><div class="r" data-i18n="f1r">No config to write</div><div class="n" data-i18n="f1n">Windows, systemd-boot entries, shim/GRUB of each distribution and the firmware's own boot options, on every disk.</div></div>
+        <div class="card"><div class="g" data-i18n="f2k">Shows the real name</div><div class="r" data-i18n="f2r">Logos per system</div><div class="n" data-i18n="f2n">Two Linux installs that both say "ubuntu"? It reads each one's os-release and shows elementary OS as elementary OS.</div></div>
+        <div class="card"><div class="g" data-i18n="f3k">Mouse first</div><div class="r" data-i18n="f3r">Click, double-click, done</div><div class="n" data-i18n="f3n">Mouse and touchpad through the firmware's pointer drivers, plus the keyboard: arrows, Enter, Esc, F2.</div></div>
+        <div class="card"><div class="g" data-i18n="f4k">Yours</div><div class="r" data-i18n="f4r">Themes and wallpapers</div><div class="n" data-i18n="f4n">Five themes, a theme editor, your own pictures as wallpaper and as logos. Rename, hide and reorder entries.</div></div>
+        <div class="card"><div class="g" data-i18n="f5k">One menu, not three</div><div class="r" data-i18n="f5r">Hides the menus after it</div><div class="n" data-i18n="f5n">Optionally hides the GRUB and systemd-boot menus that would appear after bootpick. Shift, Esc or Space still opens them.</div></div>
+        <div class="card"><div class="g" data-i18n="f6k">Your language</div><div class="r" data-i18n="f6r">34 locales, right to left too</div><div class="n" data-i18n="f6n">Real text shaping for Arabic, Hindi, Thai, Chinese, Japanese and Korean, chosen from a picker with flags.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="screens">
+    <div class="wrap">
+      <h2 data-i18n="screensTitle">Settings without editing files</h2>
+      <p class="sub" data-i18n="screensSub">Press the gear (or F2) in the menu, or open the desktop app. Both edit the same settings.</p>
+      <div class="gallery">
+        <figure class="shot">
+          <img src="img/settings.webp" width="1280" height="800" loading="lazy" alt="Settings screen inside the boot menu with theme, background, timer and default entry pickers and the list of boot entries" data-i18n-alt="altSettings">
+          <figcaption data-i18n="capSettings">In the boot menu: theme, wallpaper, auto-start timer, default entry ("last selected" too), and every entry with show/hide, rename and reorder.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="img/languages.webp" width="1280" height="800" loading="lazy" alt="Language picker with country flags over the boot menu" data-i18n-alt="altLangs">
+          <figcaption data-i18n="capLangs">The language picker (L key): 34 locales with their flags and native names.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2 data-i18n="installTitle">Install</h2>
+      <p class="sub" data-i18n-html="installSub">bootpick is installed from Linux. It copies itself to the EFI partition, adds a firmware boot entry and puts it first. GRUB, systemd-boot and the Windows boot manager are not touched, so the firmware boot menu (often <code>F12</code>) can still start them directly.</p>
+      <div class="note warn" data-i18n-html="betaNote"><strong>Beta.</strong> Tested on one real computer so far (see <a href="tested/">Tested on</a>) and in QEMU. Try it from a USB stick first and know how to open your firmware's boot menu.</div>
+
+      <h3 data-i18n="buildTitle">1 · Build</h3>
+      <p class="sub" style="margin-bottom:10px" data-i18n-html="buildSub">Needs a Rust toolchain (<a href="https://rustup.rs">rustup</a>) and <a href="https://docs.astral.sh/uv/">uv</a>, plus cairo and the Noto fonts for the icons and the non-Latin scripts. On Debian, Ubuntu or Pop!_OS:</p>
+      <pre><code>sudo apt install git build-essential libcairo2 fonts-noto-core fonts-noto-cjk
+git clone https://github.com/Devace-93/bootpick
+cd bootpick
+tools/build.sh</code></pre>
+
+      <h3 data-i18n="usbTitle">2 · Try it from a USB stick (optional)</h3>
+      <p class="sub" style="margin-bottom:10px" data-i18n-html="usbSub">Copies the menu to a FAT32 stick. Boot the stick from the firmware boot menu: nothing on the disk changes.</p>
+      <pre><code>tools/make-usb.sh /media/$USER/MYUSB</code></pre>
+
+      <h3 data-i18n="installStepTitle">3 · Install</h3>
+      <pre><code>sudo ./install.sh</code></pre>
+      <p class="sub" style="margin-top:10px" data-i18n-html="installStepSub">It also installs the <strong>bootpick settings</strong> app and opens it. Run it again to update: if bootpick is already on the computer (even installed from another Linux), it updates that copy and asks whether to <strong>keep</strong> your settings or <strong>reset</strong> them.</p>
+
+      <div class="two" style="margin-top:28px">
+        <div>
+          <h3 style="margin-top:0" data-i18n="reqTitle">Requirements</h3>
+          <ul class="plain">
+            <li data-i18n="req1">A 64-bit UEFI computer (most PCs since 2012). Legacy BIOS mode is not supported.</li>
+            <li data-i18n-html="req2"><strong>Secure Boot off</strong>, or the binary signed with your own key.</li>
+            <li data-i18n="req3">Linux to install from. Windows-only computers are not supported yet.</li>
+            <li data-i18n="req4">A mouse in the menu needs firmware with a pointer driver (most laptops have one). Without it, the keyboard does everything.</li>
+          </ul>
+        </div>
+        <div>
+          <h3 style="margin-top:0" data-i18n="removeTitle">Turn it off or remove it</h3>
+          <ol class="steps">
+            <li data-i18n-html="rm1"><strong>Disable</strong> in the app: the next loader in the boot order starts, nothing is deleted.</li>
+            <li data-i18n-html="rm2"><strong>Uninstall</strong> in the app: removes the menu, its boot entry and the app, and shows the menus it hid again. From a terminal: <code>sudo ./install.sh --uninstall</code>.</li>
+            <li data-i18n-html="rm3">Stuck? Pick your old loader from the firmware boot menu (<code>F12</code>, <code>F9</code> or <code>Esc</code> on most machines).</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="app">
+    <div class="wrap">
+      <h2 data-i18n="appTitle">The settings app</h2>
+      <p class="sub" data-i18n-html="appSub">Open <strong>bootpick settings</strong> from the app menu. It asks for your password once and shows a live preview drawn by the same code as the boot menu.</p>
+      <figure class="shot">
+        <img src="img/app.webp" width="1280" height="656" loading="lazy" alt="bootpick settings desktop app with general settings, theme, backgrounds and boot entries on the left and a live preview of the menu on the right" data-i18n-alt="altApp">
+      </figure>
+      <div class="two" style="margin-top:24px">
+        <div>
+          <h3 style="margin-top:0" data-i18n="whatTitle">What you can change</h3>
+          <ul class="plain">
+            <li data-i18n="w1">Language, auto-start timer and default entry.</li>
+            <li data-i18n="w2">Names and logos: import any image as a system's logo.</li>
+            <li data-i18n="w3">Wallpapers: add your own pictures or remove the bundled ones.</li>
+            <li data-i18n="w4">Themes: duplicate a built-in one and change every colour.</li>
+            <li data-i18n="w5">Undo and redo for every change, a confirmation before losing unsaved work.</li>
+          </ul>
+        </div>
+        <div>
+          <h3 style="margin-top:0" data-i18n="menusTitle">The menus after bootpick</h3>
+          <p class="sub" data-i18n-html="menusSub">Ubuntu and its family start through GRUB, Pop!_OS through systemd-boot, and both can show their own menu after bootpick. The app lists them and hides each one with a click (a marked block in GRUB's <code>custom.cfg</code>, <code>timeout 0</code> in <code>loader.conf</code>), and puts them back just as easily.</p>
+          <div class="note" data-i18n-html="menusNote">Per GRUB, <em>Also hide it after a forced shutdown</em> decides whether the menu still appears when the previous start did not finish, so recovery stays one key away.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <h2 data-i18n="howTitle">How it works</h2>
+      <p class="sub" data-i18n="howSub">bootpick is a small UEFI application written in Rust without the standard library. The firmware starts it like any other boot loader.</p>
+      <div class="grid">
+        <div class="card"><div class="g">1</div><div class="r" data-i18n="h1r">Scan</div><div class="n" data-i18n="h1n">Reads every EFI partition and the firmware's boot options, then sorts what it finds into systems and extras.</div></div>
+        <div class="card"><div class="g">2</div><div class="r" data-i18n="h2r">Draw</div><div class="n" data-i18n="h2n">Renders icons, text and wallpaper itself through the firmware's graphics output, at the screen's native resolution.</div></div>
+        <div class="card"><div class="g">3</div><div class="r" data-i18n="h3r">Start</div><div class="n" data-i18n-html="h3n">Loads the chosen loader directly. systemd-boot gets the entry through <code>LoaderEntryOneShot</code>; firmware options through <code>BootNext</code>.</div></div>
+        <div class="card"><div class="g">4</div><div class="r" data-i18n="h4r">Remember</div><div class="n" data-i18n-html="h4n">Settings live in <code>\EFI\bootpick\bootpick.conf</code>, a plain text file every installed Linux can edit.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="help">
+    <div class="wrap">
+      <h2 data-i18n="helpTitle">Troubleshooting</h2>
+      <div class="tbl">
+        <table>
+          <tr><th data-i18n="thSymptom">Symptom</th><th data-i18n="thCheck">Check</th></tr>
+          <tr><td data-i18n="s1">The computer still starts GRUB or Windows</td><td data-i18n-html="c1">The firmware may reorder boot entries after an update. Run <code>sudo ./install.sh</code> again, or move <em>bootpick</em> first in the firmware setup.</td></tr>
+          <tr><td data-i18n="s2">"Security violation" or nothing happens</td><td data-i18n="c2">Secure Boot is on. Turn it off in the firmware setup.</td></tr>
+          <tr><td data-i18n="s3">No mouse pointer</td><td data-i18n-html="c3">The firmware exposes no pointer device. Use the keyboard, or drop a UEFI mouse driver in <code>\EFI\bootpick\drivers\</code>.</td></tr>
+          <tr><td data-i18n="s4">A system is missing</td><td data-i18n="c4">Press Esc to show hidden entries, then tick it in the settings. Encrypted or LVM disks are fine: bootpick only needs their loader on an EFI partition.</td></tr>
+          <tr><td data-i18n="s5">GRUB still shows its menu</td><td data-i18n="c5">Hide it in the app. If it appears only after a start that did not finish, that is GRUB's recovery behaviour; tick "Also hide it after a forced shutdown" to hide it then too.</td></tr>
+          <tr><td data-i18n="s6">It hangs after picking a system</td><td data-i18n-html="c6">Look at <code>\EFI\bootpick\bootpick.log</code>: it shows whether bootpick handed over to the loader. Some firmware hangs with certain USB sticks plugged in, with or without bootpick.</td></tr>
+        </table>
+      </div>
+      <p class="sub" style="margin-top:18px"><a href="tested/" data-i18n="testedLink">Computers and systems this has been tested on</a></p>
+      <p class="sub" style="margin-top:18px" data-i18n-html="helpMore">More in the <a href="https://github.com/Devace-93/bootpick#troubleshooting">README</a>, or open an <a href="https://github.com/Devace-93/bootpick/issues">issue</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div id="supporters"></div>
+    <div id="support"></div>
+    <p class="links">
+      <a href="https://www.linkedin.com/in/enrique-magallon/" target="_blank" rel="noopener noreferrer"><span data-i18n="madeBy">Made by</span> Enrique Magallón</a>
+      <a href="https://github.com/Devace-93/bootpick" data-i18n="source">Source</a>
+      <a href="https://info.3m4.net">info.3m4.net</a>
+    </p>
+    <p data-i18n="disclaimer">bootpick is an independent open-source project, not affiliated with or endorsed by Microsoft, Canonical, System76, elementary or any other company whose system it starts. Product names and logos belong to their owners and are used only to identify those systems.</p>
+    <p>bootpick · MIT</p>
+  </div>
+</footer>
+
+<script src="i18n.js"></script>
+<script>
+  // Copy buttons
+  document.querySelectorAll('pre').forEach(pre => {
+    const b = document.createElement('button');
+    b.className = 'copy'; b.type = 'button'; b.textContent = 'Copy';
+    b.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(pre.querySelector('code').innerText);
+        b.textContent = BootpickI18n.t('copied'); b.classList.add('done');
+        setTimeout(() => { b.textContent = BootpickI18n.t('copy'); b.classList.remove('done'); }, 1500);
+      } catch (e) { b.textContent = 'Select & copy'; }
+    });
+    pre.appendChild(b);
+  });
+
+  BootpickI18n.init();
+</script>
+</body>
+</html>
