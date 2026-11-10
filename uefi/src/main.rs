@@ -6,6 +6,7 @@
 extern crate alloc;
 
 mod boot;
+mod display;
 mod esp;
 mod input;
 mod scan;
@@ -22,6 +23,7 @@ fn main() -> Status {
     let _ = uefi::boot::set_watchdog_timer(0, 0x1_0000, None);
     shell::splash(0);
     trace::line("==== bootpick start");
+    display::probe();
     trace::line(&alloc::format!(
         "firmware: {} rev {:#x}, UEFI {}",
         uefi::system::firmware_vendor(),
