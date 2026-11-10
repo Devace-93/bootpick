@@ -105,9 +105,11 @@ struct Lsblk {
     blockdevices: Vec<Part>,
 }
 
+/// PARTN is not requested: lsblk older than util-linux 2.39 rejects the whole
+/// call for an unknown column. `fill_missing` reads it from sysfs instead.
 pub fn partitions() -> Vec<Part> {
     let out = Command::new("lsblk")
-        .args(["-J", "-l", "-o", "NAME,PATH,PKNAME,TYPE,TRAN,PARTN,PARTUUID,PARTTYPE,FSTYPE,UUID,MOUNTPOINT"])
+        .args(["-J", "-l", "-o", "NAME,PATH,PKNAME,TYPE,TRAN,PARTUUID,PARTTYPE,FSTYPE,UUID,MOUNTPOINT"])
         .output();
     let Ok(out) = out else { return Vec::new() };
     let mut parts: Vec<Part> = serde_json::from_slice::<Lsblk>(&out.stdout).map(|l| l.blockdevices).unwrap_or_default();
