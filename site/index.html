@@ -131,6 +131,13 @@
       <p class="sub" data-i18n-html="installSub">bootpick is installed from Linux. It copies itself to the EFI partition, adds a firmware boot entry and puts it first. GRUB, systemd-boot and the Windows boot manager are not touched, so the firmware boot menu (often <code>F12</code>) can still start them directly.</p>
       <div class="note warn" data-i18n-html="betaNote"><strong>Beta.</strong> Tested on one real computer so far (see <a href="tested/">Tested on</a>) and in QEMU. Try it from a USB stick first and know how to open your firmware's boot menu.</div>
 
+      <h3 data-i18n="dlTitle">Quick install: download</h3>
+      <p class="sub" style="margin-bottom:10px" data-i18n-html="dlSub">No Rust needed: download the ready-made package from the <a href="https://github.com/Devace-93/bootpick/releases">releases page</a>, unpack it and run the installer. Works on Ubuntu 24.04, Pop!_OS 24.04, Debian 13 or newer. To build it yourself instead, follow steps 1 to 3.</p>
+      <pre><code>curl -LO https://github.com/Devace-93/bootpick/releases/download/v0.2.0-beta/bootpick-v0.2.0-beta-x86_64-linux.tar.gz
+tar xzf bootpick-v0.2.0-beta-x86_64-linux.tar.gz
+cd bootpick-v0.2.0-beta-x86_64-linux
+sudo ./install.sh</code></pre>
+
       <h3 data-i18n="buildTitle">1 · Build</h3>
       <p class="sub" style="margin-bottom:10px" data-i18n-html="buildSub">Needs a Rust toolchain (<a href="https://rustup.rs">rustup</a>) and <a href="https://docs.astral.sh/uv/">uv</a>, plus cairo and the Noto fonts for the icons and the non-Latin scripts. On Debian, Ubuntu or Pop!_OS:</p>
       <pre><code>sudo apt install git build-essential libcairo2 fonts-noto-core fonts-noto-cjk

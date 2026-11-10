@@ -55,6 +55,21 @@ screen to rename, hide, and reorder entries without editing files.
   `\EFI\ubuntu` folder) from `os-release`.
 
 
+## Download
+
+No Rust toolchain needed: grab the prebuilt package from the
+[releases page](https://github.com/Devace-93/bootpick/releases) (x86_64; the
+settings app needs glibc 2.39+, i.e. Ubuntu/Pop!_OS 24.04, Debian 13 or newer).
+
+```sh
+curl -LO https://github.com/Devace-93/bootpick/releases/download/v0.2.0-beta/bootpick-v0.2.0-beta-x86_64-linux.tar.gz
+tar xzf bootpick-v0.2.0-beta-x86_64-linux.tar.gz
+cd bootpick-v0.2.0-beta-x86_64-linux
+sudo ./install.sh                   # or first: tools/make-usb.sh /media/$USER/MYUSB
+```
+
+Release tarballs are made with `tools/package.sh <tag>`.
+
 ## Build
 
 ```sh

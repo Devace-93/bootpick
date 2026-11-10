@@ -6,7 +6,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 USB="${1:?mount point of the USB stick}"
 mountpoint -q "$USB" || { echo "$USB is not a mount point" >&2; exit 1; }
-cargo build --release --target x86_64-unknown-uefi --manifest-path "$ROOT/uefi/Cargo.toml"
+# Release tarballs ship the built menu and have no Rust toolchain.
+if command -v cargo >/dev/null; then cargo build --release --target x86_64-unknown-uefi --manifest-path "$ROOT/uefi/Cargo.toml"; fi
 mkdir -p "$USB/EFI/BOOT" "$USB/EFI/bootpick/icons" "$USB/EFI/bootpick/backgrounds" "$USB/EFI/bootpick/drivers"
 cp "$ROOT/uefi/target/x86_64-unknown-uefi/release/bootpick.efi" "$USB/EFI/BOOT/BOOTX64.EFI"
 cp "$ROOT"/esp/EFI/bootpick/icons/*.bmp "$USB/EFI/bootpick/icons/"
