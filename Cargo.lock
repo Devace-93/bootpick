@@ -171,6 +171,7 @@ version = "0.2.0"
 dependencies = [
  "bootpick-core",
  "eframe",
+ "flate2",
  "image",
  "rfd",
  "serde",

@@ -32,7 +32,8 @@ On Windows:
 tools\build.ps1                     # UEFI menu + settings app; fetches the generated assets from a release if missing
 target\release\bootpick-config.exe --probe   # from an elevated prompt: what the installer sees (read-only)
 .\install.cmd [-Keep|-Reset|-NoBootEntry|-NoApp|-Uninstall]   # self-elevates
-tools\package.ps1 <tag>             # release zip in dist\
+tools\package.ps1 <tag>             # single-file installer (...-windows-setup.exe) and zip in dist\
+target\release\bootpick-config.exe --setup-preview fresh|existing|warnings|installed|done|removed|app-removed|failed [--screenshot out.png]   # the installer window with made-up findings; installs nothing
 ```
 
 Windows toolchain notes: MSVC works with plain `cargo`. Without Visual Studio, `stable-x86_64-pc-windows-gnu` builds `core` and the UEFI menu but **not** `bootpick-config` (its `dlltool` needs `as.exe`, which rustup does not ship). `build.ps1` then builds the app with `+stable-x86_64-pc-windows-gnullvm` and `RUSTFLAGS="-Clinker-flavor=ld.lld -Clinker=rust-lld -Clink-self-contained=yes -Lnative=<repo>/target/winlibs"` (a copy of `opengl32.dll` there stands in for the missing import library). Use the same toolchain and flags for `cargo test` on the host workspace.
@@ -70,6 +71,7 @@ The central design rule: **everything not tied to UEFI lives in `core` (`no_std`
   - Everything OS-specific goes through `mod sys` (`sys_linux.rs` / `sys_windows.rs`, selected by `#[cfg_attr(..., path)]` in `main.rs`) with the same function names on both sides: `partitions()`, `Mounted`, firmware variables and `boot_*` entry operations, the helper channel, app files, locale, fonts. Keep `host.rs`, `helper.rs`, `menus.rs` and `app.rs` free of `cfg` and OS calls.
   - Linux: `lsblk`/`blkid`, temporary mounts, efivarfs for reads and `efibootmgr` for writes. Windows: volumes are reached by `\\?\Volume{guid}\` paths (nothing is mounted; build sub-paths with `host::sub`, since verbatim paths reject `/`), firmware variables through `Get/SetFirmwareEnvironmentVariable` (needs elevation), and Boot#### entries are built by `host::load_option`.
   - `install.rs` (Windows only) is the installer behind `--install` / `--probe`; it reuses `helper::find_esp`, so an existing install on any FAT partition is updated in place. On Linux the installer is `install.sh`.
+  - The single-file Windows installer is the settings app itself with the boot menu files appended (`--make-setup OUT.exe`: gzip of name/data records, then its length and a magic trailer; see `install.rs`). Started without options, such a file opens the installer window (`setup.rs`), which elevates itself and calls `install::install`; the app it installs is the same program with the appended part cut off. File names are checked against an allow-list (`valid_name`) on both packing and unpacking. Strings of the window are the `su_*` keys of `assets/i18n/app.json`.
   - Insyde firmware (HP and others) rebuilds `BootOrder` at every start from its own `PhysicalBootOrder` variable (vendor `59d1c24f-50f1-401a-b101-f33e0daed443`). `sys_windows::boot_set_order` writes both and reads the second back; the Linux side (`efibootmgr`) writes only `BootOrder`. `bootpick-config --probe --vars` (elevated) dumps every firmware variable.
   - Windows cannot read ext4/btrfs: GRUB menus whose files live there show `Problem::Unreadable` and OS detection behind GRUB returns nothing. That is expected, not a bug.
   - The Windows binary is GUI-subsystem; CLI modes call `sys::attach_console()`. PowerShell does not wait for GUI programs: use `Start-Process -Wait -NoNewWindow`.
@@ -84,7 +86,7 @@ The central design rule: **everything not tied to UEFI lives in `core` (`no_std`
 ## Other
 
 - Themes are built in, defined in `core/src/config.rs`. `bootpick.conf.example` documents the config format.
-- `site/download.js` drives the hero "Download" button: it detects Windows or Linux and points the button at the newest GitHub release asset ending in `-x86_64-windows.zip` / `-x86_64-linux.tar.gz` (the names `tools/package.ps1` and `tools/package.sh` produce; pre-releases count). With no package for the visitor's system it links to `#install`. Publishing a release with those assets is all it takes; keep the names.
+- `site/download.js` drives the hero "Download" button: it detects Windows or Linux and points the button at the newest GitHub release asset ending in `-x86_64-windows-setup.exe` (else `-x86_64-windows.zip`) / `-x86_64-linux.tar.gz` (the names `tools/package.ps1` and `tools/package.sh` produce; pre-releases count). With no package for the visitor's system it links to `#install`. Publishing a release with those assets is all it takes; keep the names.
 - Site strings live in `site/i18n.js`, one catalog per language (23), all with the same keys as `en`.
 - `site/` is the landing page (bootpick.3m4.net), deployed to GitHub Pages by `.github/workflows/pages.yml` on pushes to `main` touching `site/**`. There is no CI for the Rust code.
 - Version `0.2.0` is repeated in the three `Cargo.toml` files; the release tag and download URL in `README.md` and the site also carry it.

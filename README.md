@@ -70,9 +70,10 @@ sudo ./install.sh                   # or first: tools/make-usb.sh /media/$USER/M
 
 Release tarballs are made with `tools/package.sh <tag>`.
 
-On Windows the package is a zip made with `tools\package.ps1 <tag>`
-(`bootpick-<tag>-x86_64-windows.zip`): extract it and double-click
-`install.cmd`. See [Install from Windows](#install-from-windows).
+On Windows, download the installer (`bootpick-<tag>-x86_64-windows-setup.exe`)
+and open it. See [Install from Windows](#install-from-windows).
+`tools\package.ps1 <tag>` makes it, together with a zip of the same files
+for use from a terminal.
 
 ## Build
 
@@ -147,6 +148,17 @@ instead of adding a second one, and asks whether to keep its settings
 Linux you want to change the settings from: all of them edit the same copy.
 
 ### Install from Windows
+
+Open `bootpick-<tag>-x86_64-windows-setup.exe`. It asks for administrator
+rights (UAC) once, shows where bootpick will go (or that it is already
+installed, with the choice to keep or reset its settings, to remove it, or to
+uninstall only the settings app from this Windows) and installs. It is
+one file: the settings app with the boot menu files packed inside. The
+program is not signed, so Windows SmartScreen may warn about an unknown
+publisher the first time.
+
+From the zip package or a source tree (after `tools\build.ps1`), the same
+installation runs from a terminal:
 
 ```bat
 powershell -ExecutionPolicy Bypass -File tools\make-usb.ps1 E:

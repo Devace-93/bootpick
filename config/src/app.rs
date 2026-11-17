@@ -1322,7 +1322,7 @@ impl Drop for App {
 }
 
 /// System fonts for scripts egui's defaults lack: (name, data, script tag).
-fn system_fonts() -> Vec<(String, Arc<egui::FontData>, &'static str)> {
+pub fn system_fonts() -> Vec<(String, Arc<egui::FontData>, &'static str)> {
     let mut v: Vec<(String, Arc<egui::FontData>, &'static str)> = Vec::new();
     for (name, path, index, tag) in sys::script_fonts() {
         // Several candidates may be listed per font: the first that exists wins.
@@ -1340,7 +1340,7 @@ fn system_fonts() -> Vec<(String, Arc<egui::FontData>, &'static str)> {
 
 /// egui fonts: defaults, DejaVu, then script fonts with the current
 /// language's font first (CJK variants share code points).
-fn apply_fonts(ctx: &egui::Context, files: &[(String, Arc<egui::FontData>, &'static str)], base: &str) {
+pub fn apply_fonts(ctx: &egui::Context, files: &[(String, Arc<egui::FontData>, &'static str)], base: &str) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert("dejavu".into(), Arc::new(egui::FontData::from_static(include_bytes!("../../assets/DejaVuSans.ttf"))));
     let mut order: Vec<String> = vec!["dejavu".into()];
@@ -1364,7 +1364,7 @@ fn apply_fonts(ctx: &egui::Context, files: &[(String, Arc<egui::FontData>, &'sta
 /// runs. Reorders a right-to-left string into visual run order (same
 /// simplified bidi as the boot menu) so egui lays the runs out correctly;
 /// each Arabic run is still shaped right to left by egui itself.
-fn bidi_visual(s: &str) -> String {
+pub fn bidi_visual(s: &str) -> String {
     #[derive(Clone, Copy, PartialEq)]
     enum D {
         L,

@@ -26,7 +26,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken,
 use windows_sys::Win32::System::WindowsProgramming::{GetFirmwareEnvironmentVariableExW, SetFirmwareEnvironmentVariableExW};
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
-use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWNORMAL};
 
 // All of these accept a handle opened without any access right.
 const IOCTL_DISK_GET_DRIVE_GEOMETRY: u32 = 0x0007_0000;
@@ -619,6 +619,26 @@ pub fn spawn_helper() -> Result<HelperIo, String> {
             let _ = watcher.join();
         })),
     })
+}
+
+/// Starts this program again with administrator rights (one UAC prompt)
+/// and the arguments given. False when that was refused.
+pub fn run_elevated(params: &str) -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let verb = wide("runas");
+    let wexe = wide(&exe.display().to_string());
+    let wparams = wide(params);
+    // SAFETY: SHELLEXECUTEINFOW is a plain structure; the strings outlive the call.
+    unsafe {
+        let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOASYNC;
+        info.lpVerb = verb.as_ptr();
+        info.lpFile = wexe.as_ptr();
+        info.lpParameters = wparams.as_ptr();
+        info.nShow = SW_SHOWNORMAL as i32;
+        ShellExecuteExW(&mut info) != 0
+    }
 }
 
 // ----- the installed app ------------------------------------------------------------------

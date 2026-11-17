@@ -1,8 +1,13 @@
 //! The Windows installer (`bootpick-config --install`, elevated; started by
-//! install.ps1). The counterpart of install.sh: copies the boot menu to an
-//! EFI System Partition, makes it the first firmware boot entry and installs
-//! the settings app. Existing loaders (the Windows boot manager, GRUB,
-//! systemd-boot) are left untouched.
+//! install.ps1 or by the installer window in setup.rs). The counterpart of
+//! install.sh: copies the boot menu to an EFI System Partition, makes it the
+//! first firmware boot entry and installs the settings app. Existing loaders
+//! (the Windows boot manager, GRUB, systemd-boot) are left untouched.
+//!
+//! The files to install are read from a folder (a release package or a built
+//! source tree) or from this program itself: `--make-setup OUT.exe` writes a
+//! copy of the program with the files packed at its end, a single-file
+//! installer.
 //!
 //! When bootpick is already installed on any FAT partition of this computer
 //! (for example from a Linux on the same machine), that copy is updated in
@@ -13,20 +18,21 @@ use crate::host::{self, DirStorage, Mounted, Part};
 use crate::menus::{self, Env};
 use crate::sys;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 const LABEL: &str = "bootpick";
 const LOADER: &str = "\\EFI\\bootpick\\bootpick.efi";
 
-struct Opts {
-    source: Option<PathBuf>,
+pub struct Opts {
+    pub source: Option<PathBuf>,
     /// Some(true) = reset, Some(false) = keep, None = ask.
-    reset: Option<bool>,
-    boot_entry: bool,
-    app: bool,
-    open_app: bool,
-    uninstall: bool,
+    pub reset: Option<bool>,
+    pub boot_entry: bool,
+    pub app: bool,
+    pub open_app: bool,
+    pub uninstall: bool,
 }
 
 pub fn run(args: &[String]) -> ! {
@@ -35,6 +41,8 @@ pub fn run(args: &[String]) -> ! {
         dump_vars()
     } else if args.iter().any(|a| a == "--probe") {
         probe()
+    } else if let Some(i) = args.iter().position(|a| a == "--make-setup") {
+        make_setup(args.get(i + 1).map(Path::new), args.iter().position(|a| a == "--source").and_then(|i| args.get(i + 1)).map(Path::new))
     } else {
         parse(args).and_then(install)
     };
@@ -71,15 +79,30 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     Ok(o)
 }
 
-/// The files to install: a release package or a built source tree.
-struct Source {
-    efi: PathBuf,
-    assets: PathBuf,
-    drivers: PathBuf,
-    conf: PathBuf,
+/// The files to install, by their path below `\EFI\bootpick` (with `/`):
+/// `bootpick.efi`, `bootpick.conf` (the factory settings) and the files of
+/// the folders in `FOLDERS`.
+type Source = Vec<(String, Vec<u8>)>;
+
+/// (folder, file extension)
+const FOLDERS: [(&str, &str); 5] = [("icons", ".bmp"), ("flags", ".bmp"), ("fonts", ".ttf"), ("backgrounds", ".bmp"), ("drivers", ".efi")];
+
+fn load_folder(out: &mut Source, dir: &Path, folder: &str, ext: &str) -> Result<(), String> {
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if e.file_type().map(|t| t.is_file()).unwrap_or(false) && name.to_ascii_lowercase().ends_with(ext) {
+            out.push((format!("{}/{}", folder, name), fs::read(e.path()).map_err(|e| format!("{}: {}", name, e))?));
+        }
+    }
+    Ok(())
 }
 
-fn find_source(given: Option<&Path>) -> Result<Source, String> {
+/// From the folder given, from this program when it is a single-file
+/// installer, or from the folder the program is in.
+fn load_source(given: Option<&Path>) -> Result<Source, String> {
+    if given.is_none() && payload_span().is_some() {
+        return unpack();
+    }
     let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
     let mut roots: Vec<PathBuf> = Vec::new();
     match given {
@@ -103,37 +126,148 @@ fn find_source(given: Option<&Path>) -> Result<Source, String> {
                     return Err(format!("assets missing in {} (run tools\\build.ps1 first)", assets.display()));
                 }
             }
-            return Ok(Source { efi, assets, drivers: root.join("assets").join("drivers"), conf: root.join("bootpick.conf.example") });
+            let mut src: Source = vec![
+                ("bootpick.efi".into(), fs::read(&efi).map_err(|e| format!("bootpick.efi: {}", e))?),
+                ("bootpick.conf".into(), fs::read(root.join("bootpick.conf.example")).map_err(|e| format!("bootpick.conf.example: {}", e))?),
+            ];
+            for (folder, ext) in FOLDERS {
+                let dir = if folder == "drivers" { root.join("assets").join("drivers") } else { assets.join(folder) };
+                load_folder(&mut src, &dir, folder, ext)?;
+            }
+            return Ok(src);
         }
     }
     Err("bootpick.efi not found: run this from the release package or build first (tools\\build.ps1)".into())
 }
 
-/// Total size of the regular files directly in `dir` and one level below.
-fn dir_size(dir: &Path) -> u64 {
-    fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| match e.metadata() {
-            Ok(m) if m.is_dir() => fs::read_dir(e.path()).into_iter().flatten().flatten().filter_map(|f| f.metadata().ok()).filter(|m| m.is_file()).map(|m| m.len()).sum(),
-            Ok(m) => m.len(),
-            Err(_) => 0,
-        })
-        .sum()
+// ----- the single-file installer ----------------------------------------------------------
+//
+// program | gzip(files) | length of the gzip part (u64, little endian) | MAGIC
+// files: for each one, name length (u16), name, data length (u32), data.
+
+const MAGIC: &[u8; 16] = b"bootpick-setup\x01\n";
+const TRAILER: u64 = 24;
+const DAMAGED: &str = "the installer file is damaged: download it again";
+
+/// (length of the program itself, length of the packed files) when this
+/// program is a single-file installer.
+fn payload_span() -> Option<(u64, u64)> {
+    span_of(&std::env::current_exe().ok()?)
 }
 
-fn copy_files(src: &Path, dst: &Path, ext: &str) -> Result<usize, String> {
-    fs::create_dir_all(dst).map_err(|e| format!("{}: {}", dst.display(), e))?;
-    let mut n = 0;
-    for e in fs::read_dir(src).into_iter().flatten().flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if e.file_type().map(|t| t.is_file()).unwrap_or(false) && name.to_ascii_lowercase().ends_with(ext) {
-            fs::copy(e.path(), dst.join(&name)).map_err(|e| format!("{}: {}", name, e))?;
-            n += 1;
-        }
+fn span_of(file: &Path) -> Option<(u64, u64)> {
+    let mut f = fs::File::open(file).ok()?;
+    let total = f.metadata().ok()?.len();
+    if total < TRAILER {
+        return None;
     }
-    Ok(n)
+    f.seek(SeekFrom::End(-(TRAILER as i64))).ok()?;
+    let mut tail = [0u8; TRAILER as usize];
+    f.read_exact(&mut tail).ok()?;
+    if &tail[8..] != MAGIC {
+        return None;
+    }
+    let len = u64::from_le_bytes(tail[..8].try_into().ok()?);
+    (len <= total - TRAILER).then(|| (total - TRAILER - len, len))
+}
+
+/// Whether this program carries the files to install.
+pub fn is_setup() -> bool {
+    payload_span().is_some()
+}
+
+/// This program without the packed files: what is installed as the settings app.
+fn program_bytes() -> Result<Vec<u8>, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut bytes = fs::read(&exe).map_err(|e| format!("{}: {}", exe.display(), e))?;
+    if let Some((n, _)) = payload_span() {
+        bytes.truncate(n as usize);
+    }
+    Ok(bytes)
+}
+
+/// Only the names the installer writes: no path can leave `\EFI\bootpick`.
+fn valid_name(name: &str) -> bool {
+    if name == "bootpick.efi" || name == "bootpick.conf" {
+        return true;
+    }
+    match name.split_once('/') {
+        Some((folder, file)) => {
+            FOLDERS.iter().any(|(f, ext)| *f == folder && file.to_ascii_lowercase().ends_with(ext)) && !file.is_empty() && !file.starts_with('.') && !file.contains(['/', '\\', ':'])
+        }
+        None => false,
+    }
+}
+
+fn unpack() -> Result<Source, String> {
+    unpack_file(&std::env::current_exe().map_err(|e| e.to_string())?)
+}
+
+fn unpack_file(file: &Path) -> Result<Source, String> {
+    let (start, len) = span_of(file).ok_or("this program carries no files to install")?;
+    let mut f = fs::File::open(file).map_err(|e| e.to_string())?;
+    f.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    let mut packed = Vec::new();
+    f.take(len).read_to_end(&mut packed).map_err(|e| e.to_string())?;
+    unpack_bytes(&packed)
+}
+
+fn unpack_bytes(packed: &[u8]) -> Result<Source, String> {
+    let mut data = Vec::new();
+    flate2::read::GzDecoder::new(packed).read_to_end(&mut data).map_err(|_| DAMAGED)?;
+    let mut rest = &data[..];
+    let mut src = Source::new();
+    while !rest.is_empty() {
+        let n = rest.get(..2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize).ok_or(DAMAGED)?;
+        let name = rest.get(2..2 + n).and_then(|b| std::str::from_utf8(b).ok()).ok_or(DAMAGED)?;
+        rest = &rest[2 + n..];
+        let size = rest.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).ok_or(DAMAGED)?;
+        let body = rest.get(4..4 + size).ok_or(DAMAGED)?;
+        rest = &rest[4 + size..];
+        if !valid_name(name) {
+            return Err(DAMAGED.into());
+        }
+        src.push((name.to_string(), body.to_vec()));
+    }
+    if !src.iter().any(|(n, _)| n == "bootpick.efi") {
+        return Err(DAMAGED.into());
+    }
+    Ok(src)
+}
+
+fn pack(src: &Source) -> Result<Vec<u8>, String> {
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    for (name, data) in src {
+        if !valid_name(name) {
+            return Err(format!("{}: not a file the installer accepts", name));
+        }
+        let mut put = |b: &[u8]| enc.write_all(b).map_err(|e| e.to_string());
+        put(&(name.len() as u16).to_le_bytes())?;
+        put(name.as_bytes())?;
+        put(&(data.len() as u32).to_le_bytes())?;
+        put(data)?;
+    }
+    enc.finish().map_err(|e| e.to_string())
+}
+
+/// `--make-setup OUT.exe [--source DIR]`: a copy of this program with the
+/// files to install packed at its end.
+fn make_setup(out: Option<&Path>, source: Option<&Path>) -> Result<(), String> {
+    let out = out.ok_or("--make-setup needs the name of the file to write")?;
+    let src = load_source(source)?;
+    let packed = pack(&src)?;
+    let mut bytes = program_bytes()?;
+    let program = bytes.len();
+    bytes.extend_from_slice(&packed);
+    bytes.extend_from_slice(&(packed.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(MAGIC);
+    fs::write(out, &bytes).map_err(|e| format!("{}: {}", out.display(), e))?;
+    // Read back the way the installer will.
+    if unpack_file(out)? != src {
+        return Err(format!("{}: the packed files do not read back", out.display()));
+    }
+    println!("{}: {} files, {} MB (program {} MB, files {} MB)", out.display(), src.len(), bytes.len() >> 20, program >> 20, packed.len() >> 20);
+    Ok(())
 }
 
 /// Where a fresh install goes: an EFI System Partition, the one on the disk
@@ -168,7 +302,61 @@ fn ask_keep() -> bool {
     !matches!(line.trim().to_ascii_lowercase().as_str(), "r" | "reset")
 }
 
-fn install(o: Opts) -> Result<(), String> {
+/// PowerShell without a console window of its own.
+fn powershell(script: &str) -> std::process::Command {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut c = std::process::Command::new("powershell.exe");
+    c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]).creation_flags(CREATE_NO_WINDOW);
+    c
+}
+
+/// What the installer window shows before anything is changed.
+pub struct Survey {
+    /// The EFI partition bootpick goes to.
+    pub target: String,
+    /// bootpick is there already: it can be updated (settings kept or
+    /// reset) or removed.
+    pub existing: bool,
+    /// The settings app is installed in this Windows.
+    pub app_installed: bool,
+    pub secure_boot: bool,
+    /// BitLocker protects the Windows volume: a new first boot entry makes
+    /// Windows ask for the recovery key.
+    pub bitlocker: bool,
+}
+
+pub fn survey() -> Result<Survey, String> {
+    if !sys::is_elevated() {
+        return Err("administrator rights are needed".into());
+    }
+    if host::efivar("BootOrder").is_none() {
+        return Err("the firmware boot entries cannot be read: bootpick needs a computer started in UEFI mode".into());
+    }
+    let (esp, existing) = match helper::find_esp() {
+        Ok((p, _)) => (p, true),
+        Err(_) => (pick_esp(&host::partitions())?, false),
+    };
+    let bitlocker = powershell("try { if ((Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop).ProtectionStatus -eq 'On') { exit 3 } } catch { }; exit 0").status().ok().and_then(|s| s.code()) == Some(3);
+    Ok(Survey { target: describe(&esp), existing, app_installed: sys::app_exe().is_file(), secure_boot: secure_boot(), bitlocker })
+}
+
+/// Removes the settings app and its Start menu shortcut from this Windows.
+/// The boot menu on the EFI partition and its boot entry stay.
+pub fn remove_app() -> Result<(), String> {
+    if !sys::is_elevated() {
+        return Err("administrator rights are needed".into());
+    }
+    sys::remove_app();
+    Ok(())
+}
+
+/// Opens the installed settings app through the shell, so that it starts
+/// without administrator rights.
+pub fn open_app() -> bool {
+    std::process::Command::new("explorer.exe").arg(sys::app_exe()).spawn().is_ok()
+}
+
+pub fn install(o: Opts) -> Result<(), String> {
     if !sys::is_elevated() {
         return Err("administrator rights are needed: start install.cmd (or install.ps1), which asks for them".into());
     }
@@ -183,7 +371,7 @@ fn install(o: Opts) -> Result<(), String> {
         }
         return Ok(());
     }
-    let src = find_source(o.source.as_deref())?;
+    let src = load_source(o.source.as_deref())?;
     let parts = host::partitions();
     let existing = helper::find_esp().ok().map(|(p, _)| p);
     let esp = match &existing {
@@ -211,7 +399,7 @@ fn install(o: Opts) -> Result<(), String> {
     }
     if fresh {
         // EFI partitions are small: check before filling one half way.
-        let needed = dir_size(&src.assets) + dir_size(&src.drivers) + fs::metadata(&src.efi).map(|m| m.len()).unwrap_or(0) + (1 << 20);
+        let needed = src.iter().map(|(_, d)| d.len() as u64).sum::<u64>() + (1 << 20);
         if let Some(free) = sys::free_space(&m.dir) {
             if free < needed {
                 return Err(format!("not enough free space on {}: {} MB needed, {} MB free", describe(&esp), needed.div_ceil(1 << 20), free >> 20));
@@ -219,15 +407,17 @@ fn install(o: Opts) -> Result<(), String> {
         }
     }
     fs::create_dir_all(dest.join("backgrounds")).map_err(|e| format!("{}: {}", dest.display(), e))?;
-    fs::copy(&src.efi, dest.join("bootpick.efi")).map_err(|e| format!("bootpick.efi: {}", e))?;
-    copy_files(&src.assets.join("icons"), &dest.join("icons"), ".bmp")?;
-    copy_files(&src.assets.join("flags"), &dest.join("flags"), ".bmp")?;
-    copy_files(&src.assets.join("fonts"), &dest.join("fonts"), ".ttf")?;
-    copy_files(&src.drivers, &dest.join("drivers"), ".efi")?;
-    if fresh {
-        // Bundled backgrounds only on a fresh install: the user may have removed some.
-        copy_files(&src.assets.join("backgrounds"), &dest.join("backgrounds"), ".bmp")?;
-        fs::copy(&src.conf, dest.join("bootpick.conf")).map_err(|e| format!("bootpick.conf: {}", e))?;
+    for (name, data) in &src {
+        // Settings and bundled backgrounds only on a fresh install: the user
+        // may have changed the first and removed some of the second.
+        if !fresh && (name == "bootpick.conf" || name.starts_with("backgrounds/")) {
+            continue;
+        }
+        let path = name.split('/').fold(dest.clone(), |p, c| p.join(c));
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
+        }
+        fs::write(&path, data).map_err(|e| format!("{}: {}", name, e))?;
     }
     sys::sync();
     println!("boot menu installed in {} on {}", dest.display(), describe(&esp));
@@ -250,7 +440,8 @@ fn install(o: Opts) -> Result<(), String> {
         let target = sys::app_exe();
         if exe != target {
             fs::create_dir_all(sys::app_dir()).map_err(|e| format!("{}: {}", sys::app_dir().display(), e))?;
-            fs::copy(&exe, &target).map_err(|e| format!("{}: {} (close bootpick settings and try again)", target.display(), e))?;
+            // Without the packed files when this is the single-file installer.
+            fs::write(&target, program_bytes()?).map_err(|e| format!("{}: {} (close bootpick settings and try again)", target.display(), e))?;
         }
         for (name, r) in menus::upgrade(&Env::Real { parts: &parts }) {
             match r {
@@ -265,7 +456,7 @@ fn install(o: Opts) -> Result<(), String> {
         }
         if o.open_app {
             // Through the shell, so the app starts without administrator rights.
-            if std::process::Command::new("explorer.exe").arg(&target).spawn().is_ok() {
+            if open_app() {
                 println!("opening bootpick settings...");
             }
         }
@@ -281,8 +472,7 @@ fn install(o: Opts) -> Result<(), String> {
 
 fn make_shortcut(lnk: &Path, target: &Path) -> bool {
     let script = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:BOOTPICK_LNK); $s.TargetPath = $env:BOOTPICK_EXE; $s.Description = 'Configure the bootpick boot menu'; $s.Save()";
-    std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+    powershell(script)
         .env("BOOTPICK_LNK", lnk)
         .env("BOOTPICK_EXE", target)
         .status()
@@ -381,4 +571,26 @@ fn probe() -> Result<(), String> {
         println!("other boot menu: {:?} {} @ {} visible={} managed={} problem={:?}", m.kind, m.name, m.location, m.visible, m.managed, m.problem);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_files_round_trip() {
+        let src: Source = vec![("bootpick.efi".into(), vec![1, 2, 3]), ("bootpick.conf".into(), b"theme = dark".to_vec()), ("icons/os_windows.bmp".into(), vec![0; 5000]), ("drivers/ext4_x64.efi".into(), Vec::new())];
+        let packed = pack(&src).unwrap();
+        assert_eq!(unpack_bytes(&packed).unwrap(), src);
+        assert!(unpack_bytes(&packed[..packed.len() / 2]).is_err());
+    }
+
+    #[test]
+    fn packed_names_stay_inside_the_bootpick_folder() {
+        for bad in ["icons/../../x.bmp", "..\\x.bmp", "icons/a\\b.bmp", "C:/x.bmp", "icons/x.exe", "other/x.bmp", "x.efi", "icons/", "fonts/.ttf"] {
+            assert!(!valid_name(bad), "{}", bad);
+            assert!(pack(&vec![(bad.to_string(), Vec::new())]).is_err(), "{}", bad);
+        }
+        assert!(valid_name("backgrounds/Aurora.BMP"));
+    }
 }

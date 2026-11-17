@@ -5,6 +5,13 @@
 //!                                      Linux, elevated through UAC with --pipe NAME on Windows)
 //!   bootpick-config --install [--source DIR] [--keep|--reset] [--no-boot-entry] [--no-app] [--uninstall]
 //!                                      Windows installer (elevated; run by install.ps1)
+//!   bootpick-config --make-setup OUT.exe [--source DIR]
+//!                                      Windows: write the single-file installer, a copy of this
+//!                                      program with the boot menu files packed at its end. Started
+//!                                      without options, that file opens the installer window
+//!   bootpick-config --setup            Windows: the installer window (files from the folder of the program)
+//!   bootpick-config --setup-preview fresh|existing|warnings|installed|done|removed|app-removed|failed [--screenshot OUT.png]
+//!                                      Windows: the installer window with made-up findings; installs nothing
 //!   bootpick-config --probe            Windows: print what the installer sees, change nothing
 //!   bootpick-config --probe --vars     Windows: list every firmware variable
 //!   bootpick-config --upgrade-menus    rewrite GRUB blocks from an older bootpick (root; install.sh)
@@ -29,6 +36,8 @@ mod proto;
 mod sys;
 #[cfg(windows)]
 mod install;
+#[cfg(windows)]
+mod setup;
 
 use eframe::egui;
 use std::path::PathBuf;
@@ -46,8 +55,12 @@ fn main() -> eframe::Result {
         helper::run(&args);
     }
     #[cfg(windows)]
-    if args.iter().any(|a| a == "--install" || a == "--probe") {
+    if args.iter().any(|a| a == "--install" || a == "--probe" || a == "--make-setup") {
         install::run(&args);
+    }
+    #[cfg(windows)]
+    if args.iter().any(|a| a == "--setup" || a == "--setup-preview") || (args.len() == 1 && install::is_setup()) {
+        return setup::run(&args);
     }
     if args.iter().any(|a| a == "--upgrade-menus") {
         helper::upgrade_menus();
