@@ -84,5 +84,7 @@ The central design rule: **everything not tied to UEFI lives in `core` (`no_std`
 ## Other
 
 - Themes are built in, defined in `core/src/config.rs`. `bootpick.conf.example` documents the config format.
+- `site/download.js` drives the hero "Download" button: it detects Windows or Linux and points the button at the newest GitHub release asset ending in `-x86_64-windows.zip` / `-x86_64-linux.tar.gz` (the names `tools/package.ps1` and `tools/package.sh` produce; pre-releases count). With no package for the visitor's system it links to `#install`. Publishing a release with those assets is all it takes; keep the names.
+- Site strings live in `site/i18n.js`, one catalog per language (23), all with the same keys as `en`.
 - `site/` is the landing page (bootpick.3m4.net), deployed to GitHub Pages by `.github/workflows/pages.yml` on pushes to `main` touching `site/**`. There is no CI for the Rust code.
 - Version `0.2.0` is repeated in the three `Cargo.toml` files; the release tag and download URL in `README.md` and the site also carry it.
