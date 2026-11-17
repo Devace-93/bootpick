@@ -261,6 +261,15 @@ plain folders (used for the screenshots above).
 | `assets/i18n/` | UI strings (`strings.json`) and locales (`langs.json`); `tools/gen-i18n.py` generates `core/src/i18n_data.rs` |
 | `tools/` | build, asset generation, QEMU harness, USB stick helper (`.sh` for Linux, `.ps1` for Windows) |
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate
+by [SignPath Foundation](https://signpath.org). The application is in
+progress: until it is accepted the Windows files are not signed. The Windows
+installer and settings app are built from this repository by
+`.github/workflows/windows.yml` on GitHub-hosted runners. Roles, privacy
+policy and details: [Code signing policy](https://bootpick.3m4.net/code-signing-policy.html).
+
 ## License
 
 MIT. Fonts: DejaVu (Bitstream Vera license); Noto Sans CJK, Devanagari, Thai

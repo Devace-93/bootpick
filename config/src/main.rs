@@ -5,7 +5,7 @@
 //!                                      Linux, elevated through UAC with --pipe NAME on Windows)
 //!   bootpick-config --install [--source DIR] [--keep|--reset] [--no-boot-entry] [--no-app] [--uninstall]
 //!                                      Windows installer (elevated; run by install.ps1)
-//!   bootpick-config --make-setup OUT.exe [--source DIR]
+//!   bootpick-config --make-setup OUT.exe [--source DIR] [--app APP.exe]
 //!                                      Windows: write the single-file installer, a copy of this
 //!                                      program with the boot menu files packed at its end. Started
 //!                                      without options, that file opens the installer window
