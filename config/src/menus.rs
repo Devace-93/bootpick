@@ -257,7 +257,7 @@ fn grub_block_for(always: bool, os_root: Option<&str>) -> String {
 /// UUID of the system a GRUB boots when its files are not on that
 /// system's root filesystem (e.g. GRUB kept on the ESP).
 fn os_root_uuid(fs_root: &Path, cfg: &str, grub_uuid: &str) -> Option<String> {
-    if ["etc/os-release", "usr/lib/os-release"].iter().any(|r| fs_root.join(r).exists()) {
+    if ["etc/os-release", "usr/lib/os-release"].iter().any(|r| host::sub(fs_root, r).exists()) {
         return None;
     }
     let u = host::grub_linux_root(cfg)?.strip_prefix("UUID=")?.to_string();
@@ -297,7 +297,7 @@ fn grub_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
                 out.push(LoaderMenu { id, kind: MenuKind::Grub, name: vendor.clone(), location: esp.label.clone(), visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable), recordfail: false, hide_always: false, outdated: false });
                 continue;
             };
-            let dir = root.join(&rel);
+            let dir = host::sub(&root, &rel);
             let name = host::detect_grub(&root, &rel, &|spec| env.detect(spec)).map(|d| d.name).unwrap_or_else(|| vendor.clone());
             let Ok(cfg) = fs::read_to_string(dir.join("grub.cfg")) else {
                 out.push(LoaderMenu { id, kind: MenuKind::Grub, name, location: label, visible: true, timeout: None, managed: false, problem: Some(Problem::Unreadable), recordfail: false, hide_always: false, outdated: false });
@@ -311,7 +311,7 @@ fn grub_menus(env: &Env, out: &mut Vec<LoaderMenu>) {
             let outdated = managed && !block.contains("bp_env") && block.contains("recordfail") && os_root.is_some();
             let ext = if block.contains("bp_env") { os_root.and_then(|u| env.fs_by_uuid(&u, false)) } else { None };
             let recordfail = match &ext {
-                Some((r, _, _)) => read_rf(&r.join("boot/grub")),
+                Some((r, _, _)) => read_rf(&host::sub(r, "boot/grub")),
                 None => read_rf(&dir),
             };
             drop(ext);
@@ -336,19 +336,19 @@ fn set_grub(env: &Env, uuid: &str, visible: bool, always: bool) -> Result<(), St
                 continue;
             }
             let (root, _, _g) = env.fs_by_uuid(uuid, true).ok_or("cannot open the partition with the GRUB files")?;
-            let path = root.join(&rel).join("custom.cfg");
+            let path = host::sub(&root, &rel).join("custom.cfg");
             let old = fs::read_to_string(&path).unwrap_or_default();
             let mut new = strip_block(&old);
             if !visible {
                 if !new.is_empty() && !new.ends_with('\n') {
                     new.push('\n');
                 }
-                let cfg = fs::read_to_string(root.join(&rel).join("grub.cfg")).unwrap_or_default();
+                let cfg = fs::read_to_string(host::sub(&root, &rel).join("grub.cfg")).unwrap_or_default();
                 let os_root = if always { None } else { os_root_uuid(&root, &cfg, uuid) };
                 // The system's own grubenv must exist for GRUB to use it.
                 if let Some(u) = &os_root {
                     let (r, _, _g) = env.fs_by_uuid(u, true).ok_or("cannot open the system's partition to track interrupted starts")?;
-                    let env_path = r.join("boot/grub/grubenv");
+                    let env_path = host::sub(&r, "boot/grub/grubenv");
                     if !env_path.exists() {
                         fs::write(&env_path, empty_grubenv()).map_err(|e| format!("{}: {}", env_path.display(), e))?;
                     }
@@ -373,8 +373,8 @@ fn set_grub(env: &Env, uuid: &str, visible: bool, always: bool) -> Result<(), St
 const SD_VENDOR: &str = "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f";
 
 fn sd_efivar_timeout() -> Option<String> {
-    let data = fs::read(format!("/sys/firmware/efi/efivars/LoaderConfigTimeout-{}", SD_VENDOR)).ok()?;
-    let u: Vec<u16> = data.get(4..)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|c| *c != 0).collect();
+    let data = crate::sys::efivar_vendor("LoaderConfigTimeout", SD_VENDOR)?;
+    let u: Vec<u16> = data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|c| *c != 0).collect();
     Some(String::from_utf16_lossy(&u))
 }
 
@@ -477,7 +477,7 @@ fn set_sd(env: &Env, key: &str, visible: bool) -> Result<(), String> {
             lines.push("timeout 0".into());
             if env.real() && sd_efivar_timeout().is_some() {
                 // A timeout set with `bootctl set-timeout` overrides loader.conf.
-                let _ = std::process::Command::new("bootctl").args(["set-timeout", ""]).status();
+                crate::sys::clear_sd_timeout();
             }
         }
         write_atomic(&path, &(lines.join("\n") + "\n"))?;
@@ -505,7 +505,7 @@ pub fn set(env: &Env, id: &str, visible: bool, always: bool) -> Result<(), Strin
         Err(format!("unknown menu {}", id))
     };
     if env.real() {
-        let _ = std::process::Command::new("sync").status();
+        crate::sys::sync();
     }
     r
 }

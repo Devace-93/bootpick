@@ -1,12 +1,20 @@
 //! bootpick-config: desktop settings for the bootpick boot menu.
 //!
 //!   bootpick-config                    the settings window (asks for authorization once)
-//!   bootpick-config --helper           privileged helper (started by the app through pkexec)
+//!   bootpick-config --helper           privileged helper (started by the app: through pkexec on
+//!                                      Linux, elevated through UAC with --pipe NAME on Windows)
+//!   bootpick-config --install [--source DIR] [--keep|--reset] [--no-boot-entry] [--no-app] [--uninstall]
+//!                                      Windows installer (elevated; run by install.ps1)
+//!   bootpick-config --probe            Windows: print what the installer sees, change nothing
 //!   bootpick-config --upgrade-menus    rewrite GRUB blocks from an older bootpick (root; install.sh)
 //!   bootpick-config --demo DIR[:LABEL][,DIR2[:LABEL]] [--demo-root UUID=DIR]...
 //!                                      use plain directories as EFI volumes (no root)
 //!   bootpick-config --screenshot OUT.png [--open-theme-editor] [--preview-lang-menu]
 //!                   [--preview-settings] [--preview-all] [--scroll-entries] [--show-dialog quit|revert]
+
+// A GUI program on Windows: no console window behind the settings window.
+// The command line modes attach to the parent's console (see sys_windows.rs).
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
 mod helper;
@@ -15,14 +23,30 @@ mod i18n_app;
 mod imaging;
 mod menus;
 mod proto;
+#[cfg_attr(windows, path = "sys_windows.rs")]
+#[cfg_attr(not(windows), path = "sys_linux.rs")]
+mod sys;
+#[cfg(windows)]
+mod install;
 
 use eframe::egui;
 use std::path::PathBuf;
 
+/// `DIR:LABEL` -> (DIR, LABEL). The colon of a Windows drive letter
+/// (`C:\esp`) is part of the directory.
+fn split_label(spec: &str) -> Option<(&str, &str)> {
+    let (dir, label) = spec.rsplit_once(':')?;
+    (dir.len() > 1 && !label.contains(['\\', '/'])).then_some((dir, label))
+}
+
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--helper") {
-        helper::run();
+        helper::run(&args);
+    }
+    #[cfg(windows)]
+    if args.iter().any(|a| a == "--install" || a == "--probe") {
+        install::run(&args);
     }
     if args.iter().any(|a| a == "--upgrade-menus") {
         helper::upgrade_menus();
@@ -72,7 +96,7 @@ fn main() -> eframe::Result {
             .split(',')
             .enumerate()
             .map(|(n, spec)| {
-                let (dir, label) = spec.split_once(':').unwrap_or((spec, if n == 0 { "SATA p1" } else { "NVMe p1" }));
+                let (dir, label) = split_label(spec).unwrap_or((spec, if n == 0 { "SATA p1" } else { "NVMe p1" }));
                 (format!("demo-{}", n), label.to_string(), PathBuf::from(dir))
             })
             .collect();

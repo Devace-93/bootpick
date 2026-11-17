@@ -1,4 +1,4 @@
-//! Host-side discovery: partitions (lsblk), read-only mounts, the same entry
+//! Host-side discovery: partitions and volumes (see the `sys` module), the same entry
 //! scan the boot menu performs, firmware boot options (efivars) and real OS
 //! names (os-release behind each loader).
 
@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+pub use crate::sys::{partitions, Mounted};
+use crate::sys;
 
 pub const EFI_GLOBAL: &str = "8be4df61-93ca-11d2-aa0d-00e098032b8c";
-pub const EFIVARS: &str = "/sys/firmware/efi/efivars";
 const ESP_TYPE: &str = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b";
 
 // ----- a directory as core Storage ---------------------------------------------------
@@ -86,6 +86,8 @@ impl Storage for DirStorage {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Part {
+    /// Kernel name ("sda1"); only the Linux layer needs it.
+    #[cfg_attr(windows, allow(dead_code))]
     pub name: String,
     pub path: String,
     pub pkname: Option<String>,
@@ -98,60 +100,6 @@ pub struct Part {
     pub fstype: Option<String>,
     pub uuid: Option<String>,
     pub mountpoint: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Lsblk {
-    blockdevices: Vec<Part>,
-}
-
-/// PARTN is not requested: lsblk older than util-linux 2.39 rejects the whole
-/// call for an unknown column. `fill_missing` reads it from sysfs instead.
-pub fn partitions() -> Vec<Part> {
-    let out = Command::new("lsblk")
-        .args(["-J", "-l", "-o", "NAME,PATH,PKNAME,TYPE,TRAN,PARTUUID,PARTTYPE,FSTYPE,UUID,MOUNTPOINT"])
-        .output();
-    let Ok(out) = out else { return Vec::new() };
-    let mut parts: Vec<Part> = serde_json::from_slice::<Lsblk>(&out.stdout).map(|l| l.blockdevices).unwrap_or_default();
-    for p in &mut parts {
-        fill_missing(p);
-    }
-    // Partitions inherit the transport of their disk.
-    let trans: BTreeMap<String, String> = parts.iter().filter_map(|p| Some((p.name.clone(), p.tran.clone()?))).collect();
-    for p in &mut parts {
-        if p.tran.is_none() {
-            if let Some(t) = p.pkname.as_ref().and_then(|k| trans.get(k)) {
-                p.tran = Some(t.clone());
-            }
-        }
-    }
-    parts
-}
-
-/// lsblk leaves fields empty when the udev database is not readable; probe
-/// sysfs and the device itself (`blkid -p`, needs root) for what is missing.
-fn fill_missing(p: &mut Part) {
-    if p.kind.as_deref() != Some("part") {
-        return;
-    }
-    if p.partn.is_none() {
-        p.partn = fs::read_to_string(format!("/sys/class/block/{}/partition", p.name)).ok().and_then(|s| s.trim().parse().ok());
-    }
-    if p.partuuid.is_some() && p.fstype.is_some() && p.uuid.is_some() && p.parttype.is_some() {
-        return;
-    }
-    let Ok(out) = Command::new("blkid").args(["-p", "-o", "export", &p.path]).output() else { return };
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Some((k, v)) = line.split_once('=') else { continue };
-        let v = Some(v.to_string());
-        match k {
-            "PART_ENTRY_UUID" if p.partuuid.is_none() => p.partuuid = v,
-            "PART_ENTRY_TYPE" if p.parttype.is_none() => p.parttype = v,
-            "TYPE" if p.fstype.is_none() => p.fstype = v,
-            "UUID" if p.uuid.is_none() => p.uuid = v,
-            _ => {}
-        }
-    }
 }
 
 /// "NVMe p1", "SATA p9", "USB p1": the same labels the boot menu shows.
@@ -185,85 +133,10 @@ pub fn is_esp(p: &Part) -> bool {
     p.parttype.as_deref().map(|t| t.eq_ignore_ascii_case(ESP_TYPE)).unwrap_or(false)
 }
 
-// ----- mounting -----------------------------------------------------------------------
-
-/// Gives access to a partition's files: its current mount point, or a
-/// temporary read-only mount (needs root). `writable` mounts read-write.
-pub struct Mounted {
-    pub dir: PathBuf,
-    temp: bool,
-}
-
-/// Temporary mounts made by this process: device -> (dir, users, writable).
-/// A partition opened twice (an ESP that also holds GRUB's files) reuses the
-/// first mount instead of failing on a second one.
-static MOUNTS: std::sync::Mutex<BTreeMap<String, (PathBuf, usize, bool)>> = std::sync::Mutex::new(BTreeMap::new());
-
-impl Mounted {
-    pub fn open(p: &Part, writable: bool) -> Option<Mounted> {
-        if let Some(mp) = p.mountpoint.as_ref().filter(|m| !m.is_empty()) {
-            return Some(Mounted { dir: PathBuf::from(mp), temp: false });
-        }
-        let mut reg = MOUNTS.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((dir, users, rw)) = reg.get_mut(&p.path) {
-            if writable && !*rw {
-                let ok = Command::new("mount").args(["-o", "remount,rw"]).arg(&*dir).status().map(|s| s.success()).unwrap_or(false);
-                if !ok {
-                    return None;
-                }
-                *rw = true;
-            }
-            *users += 1;
-            return Some(Mounted { dir: dir.clone(), temp: true });
-        }
-        let fstype = p.fstype.as_deref()?;
-        if !matches!(fstype, "vfat" | "ext4" | "ext3" | "ext2" | "btrfs" | "xfs" | "f2fs") {
-            return None;
-        }
-        let dir = PathBuf::from(format!("/run/bootpick/mnt-{}", p.name));
-        fs::create_dir_all(&dir).ok()?;
-        let mut opts = String::from(if writable { "rw" } else { "ro" });
-        opts.push_str(",nosuid,nodev,noexec");
-        if !writable && fstype.starts_with("ext") {
-            opts.push_str(",noload"); // never replay a journal from here
-        }
-        let ok = Command::new("mount").args(["-o", &opts, &p.path]).arg(&dir).status().map(|s| s.success()).unwrap_or(false);
-        if !ok {
-            let _ = fs::remove_dir(&dir);
-            return None;
-        }
-        reg.insert(p.path.clone(), (dir.clone(), 1, writable));
-        Some(Mounted { dir, temp: true })
-    }
-}
-
-impl Drop for Mounted {
-    fn drop(&mut self) {
-        if self.temp {
-            let mut reg = MOUNTS.lock().unwrap_or_else(|e| e.into_inner());
-            let key = reg.iter().find(|(_, v)| v.0 == self.dir).map(|(k, _)| k.clone());
-            if let Some(k) = key {
-                let last = {
-                    let e = reg.get_mut(&k).unwrap();
-                    e.1 -= 1;
-                    e.1 == 0
-                };
-                if !last {
-                    return;
-                }
-                reg.remove(&k);
-            }
-            let _ = Command::new("umount").arg(&self.dir).status();
-            let _ = fs::remove_dir(&self.dir);
-        }
-    }
-}
-
 // ----- firmware variables ---------------------------------------------------------------
 
 pub fn efivar(name: &str) -> Option<Vec<u8>> {
-    let data = fs::read(Path::new(EFIVARS).join(format!("{}-{}", name, EFI_GLOBAL))).ok()?;
-    (data.len() >= 4).then(|| data[4..].to_vec())
+    sys::efivar_vendor(name, EFI_GLOBAL)
 }
 
 pub fn boot_order() -> Vec<u16> {
@@ -284,23 +157,45 @@ pub fn boot_options() -> Vec<(u16, bool, String)> {
 
 /// Every Boot#### variable present (also those not in BootOrder).
 pub fn all_boot_options() -> Vec<(u16, bool, String)> {
+    sys::boot_numbers()
+        .into_iter()
+        .filter_map(|n| {
+            let data = efivar(&format!("Boot{:04X}", n))?;
+            let (active, desc) = parse_load_option(&data)?;
+            Some((n, active, desc))
+        })
+        .collect()
+}
+
+/// A firmware load option that starts `loader` (`\EFI\...`) from a GPT
+/// partition: the contents of a Boot#### variable.
+#[cfg_attr(not(windows), allow(dead_code))] // Linux creates entries with efibootmgr
+pub fn load_option(label: &str, loader: &str, partn: u32, start_lba: u64, size_lba: u64, part_guid: [u8; 16]) -> Vec<u8> {
+    let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect() };
+    // Hard drive media node, file path node, end node.
+    let mut dp = vec![0x04, 0x01, 42, 0];
+    dp.extend(partn.to_le_bytes());
+    dp.extend(start_lba.to_le_bytes());
+    dp.extend(size_lba.to_le_bytes());
+    dp.extend(part_guid);
+    dp.extend([0x02, 0x02]); // GPT, GUID signature
+    let path = utf16(loader);
+    dp.extend([0x04, 0x04]);
+    dp.extend(((4 + path.len()) as u16).to_le_bytes());
+    dp.extend(path);
+    dp.extend([0x7f, 0xff, 4, 0]);
     let mut v = Vec::new();
-    if let Ok(rd) = fs::read_dir(EFIVARS) {
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if let Some(hex) = name.strip_prefix("Boot").and_then(|r| r.strip_suffix(&format!("-{}", EFI_GLOBAL))) {
-                if hex.len() == 4 {
-                    if let (Ok(n), Some(data)) = (u16::from_str_radix(hex, 16), efivar(&format!("Boot{}", hex))) {
-                        if let Some((active, desc)) = parse_load_option(&data) {
-                            v.push((n, active, desc));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    v.sort();
+    v.extend(1u32.to_le_bytes()); // LOAD_OPTION_ACTIVE
+    v.extend((dp.len() as u16).to_le_bytes());
+    v.extend(utf16(label));
+    v.extend(dp);
     v
+}
+
+/// Joins a `/`-separated relative path one component at a time (Windows
+/// volume paths of the `\?\` form do not accept forward slashes).
+pub fn sub(root: &Path, rel: &str) -> PathBuf {
+    rel.split('/').filter(|c| !c.is_empty()).fold(root.to_path_buf(), |p, c| p.join(c))
 }
 
 // ----- scan + OS detection ----------------------------------------------------------------
@@ -467,11 +362,11 @@ pub fn grub_linux_root(cfg: &str) -> Option<String> {
 /// (GRUB kept on an ESP or a separate /boot), else the first menu title.
 pub fn detect_grub(fs_root: &Path, prefix: &str, lookup: &dyn Fn(&str) -> Option<Detection>) -> Option<Detection> {
     for rel in ["etc/os-release", "usr/lib/os-release"] {
-        if let Some(d) = fs::read_to_string(fs_root.join(rel)).ok().and_then(|t| parse_os_release(&t)) {
+        if let Some(d) = fs::read_to_string(sub(fs_root, rel)).ok().and_then(|t| parse_os_release(&t)) {
             return Some(d);
         }
     }
-    let cfg = fs::read_to_string(fs_root.join(prefix).join("grub.cfg")).ok();
+    let cfg = fs::read_to_string(sub(fs_root, prefix).join("grub.cfg")).ok();
     if let Some(d) = cfg.as_deref().and_then(grub_linux_root).and_then(|spec| lookup(&spec)) {
         return Some(d);
     }
@@ -559,7 +454,7 @@ fn grub_first_title(cfg: &str) -> Option<String> {
 
 pub fn detect_in_dir(dir: &Path) -> Option<Detection> {
     for rel in ["etc/os-release", "usr/lib/os-release"] {
-        if let Ok(t) = fs::read_to_string(dir.join(rel)) {
+        if let Ok(t) = fs::read_to_string(sub(dir, rel)) {
             if let Some(d) = parse_os_release(&t) {
                 return Some(d);
             }
@@ -567,7 +462,7 @@ pub fn detect_in_dir(dir: &Path) -> Option<Detection> {
     }
     // A separate /boot partition: fall back to the GRUB menu title.
     for rel in ["grub/grub.cfg", "boot/grub/grub.cfg"] {
-        if let Ok(t) = fs::read_to_string(dir.join(rel)) {
+        if let Ok(t) = fs::read_to_string(sub(dir, rel)) {
             if let Some(title) = grub_first_title(&t) {
                 let id = title.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
                 return Some(Detection { icon: icon_for_os_id(&id).to_string(), name: title, id, version: String::new() });
@@ -657,6 +552,21 @@ mod tests {
     fn grub_title() {
         assert_eq!(grub_first_title("set x=1\nmenuentry 'Ubuntu' --class ubuntu {\n").as_deref(), Some("Ubuntu"));
         assert_eq!(grub_first_title("menuentry \"Fedora Linux\" {\n").as_deref(), Some("Fedora Linux"));
+    }
+
+    #[test]
+    fn load_option_layout() {
+        let guid = [0x11u8; 16];
+        let o = load_option("bootpick", r"\EFI\bootpick\bootpick.efi", 1, 2048, 614400, guid);
+        assert_eq!(parse_load_option(&o), Some((true, "bootpick".to_string())));
+        let dp = &o[6 + 9 * 2..];
+        assert_eq!(u16::from_le_bytes([o[4], o[5]]) as usize, dp.len());
+        assert_eq!(&dp[..4], &[4, 1, 42, 0]);
+        assert_eq!(u32::from_le_bytes(dp[4..8].try_into().unwrap()), 1);
+        assert_eq!(u64::from_le_bytes(dp[8..16].try_into().unwrap()), 2048);
+        assert_eq!(&dp[24..40], &guid);
+        assert_eq!(&dp[40..44], &[2, 2, 4, 4]);
+        assert_eq!(&dp[dp.len() - 4..], &[0x7f, 0xff, 4, 0]);
     }
 
     #[test]

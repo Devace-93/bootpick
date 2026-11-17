@@ -6,7 +6,8 @@ use crate::host::{self, DirStorage, RootOverride};
 use crate::i18n_app::{T, TABLE};
 use crate::menus::{self, LoaderMenu, MenuKind, Problem};
 use crate::imaging;
-use crate::proto::{LoadReply, Reply, Request, ScanJ};
+use crate::proto::{HelperIo, LoadReply, Reply, Request, ScanJ};
+use crate::sys;
 use bootpick_core::config::{builtin_themes, normalize_timeout, Config, EntryPref, Theme, THEME_FIELDS};
 use bootpick_core::gfx::{Canvas, Color};
 use bootpick_core::langs;
@@ -16,15 +17,14 @@ use bootpick_core::storage::Storage;
 use bootpick_core::text::TextEngine;
 use eframe::egui::{self, Color32, RichText, TextureHandle, TextureOptions, Vec2};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 pub enum Mode {
-    /// Talk to the privileged helper through pkexec.
+    /// Talk to the privileged helper (pkexec on Linux, UAC on Windows).
     Real,
     /// Use plain directories as volumes (no root); for demos and screenshots.
     Demo { dirs: Vec<(String, String, PathBuf)>, overrides: RootOverride },
@@ -60,26 +60,20 @@ enum JobResult {
 }
 
 struct HelperProc {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    io: HelperIo,
 }
 
 impl HelperProc {
     fn spawn() -> Result<HelperProc, String> {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut child = Command::new("pkexec").arg(exe).arg("--helper").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().map_err(|e| format!("could not start pkexec: {}", e))?;
-        let stdin = child.stdin.take().ok_or("no helper stdin")?;
-        let stdout = BufReader::new(child.stdout.take().ok_or("no helper stdout")?);
-        Ok(HelperProc { child, stdin, stdout })
+        Ok(HelperProc { io: sys::spawn_helper()? })
     }
 
     fn call(&mut self, req: &Request) -> Result<Reply, String> {
         let line = serde_json::to_string(req).map_err(|e| e.to_string())?;
-        writeln!(self.stdin, "{}", line).map_err(|_| "Authorization was cancelled or the helper stopped.".to_string())?;
-        self.stdin.flush().map_err(|e| e.to_string())?;
+        writeln!(self.io.writer, "{}", line).map_err(|_| "Authorization was cancelled or the helper stopped.".to_string())?;
+        self.io.writer.flush().map_err(|_| "Authorization was cancelled or the helper stopped.".to_string())?;
         let mut answer = String::new();
-        let n = self.stdout.read_line(&mut answer).map_err(|e| e.to_string())?;
+        let n = self.io.reader.read_line(&mut answer).map_err(|e| e.to_string())?;
         if n == 0 {
             return Err("Authorization was cancelled or the helper stopped.".into());
         }
@@ -89,8 +83,11 @@ impl HelperProc {
 
 impl Drop for HelperProc {
     fn drop(&mut self) {
-        let _ = writeln!(self.stdin, "{}", serde_json::to_string(&Request::Quit).unwrap_or_default());
-        let _ = self.child.wait();
+        let _ = writeln!(self.io.writer, "{}", serde_json::to_string(&Request::Quit).unwrap_or_default());
+        let _ = self.io.writer.flush();
+        if let Some(wait) = self.io.wait.take() {
+            wait();
+        }
     }
 }
 
@@ -247,7 +244,7 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, opts: Opts) -> App {
-        let staging = std::env::var("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir()).join(format!("bootpick-staging-{}", std::process::id()));
+        let staging = sys::staging_base().join(format!("bootpick-staging-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&staging);
         let demo = matches!(opts.mode, Mode::Demo { .. });
         let (jtx, jrx) = channel();
@@ -304,9 +301,7 @@ impl App {
 
     /// Starts the first load once the struct exists (so `busy` is localized).
     pub fn start(mut self, ctx: &egui::Context) -> Self {
-        let sys = std::env::var("LC_ALL").or_else(|_| std::env::var("LC_MESSAGES")).or_else(|_| std::env::var("LANG")).unwrap_or_default();
-        let sys = sys.split('.').next().unwrap_or("").replace('_', "-");
-        self.set_lang(langs::resolve("", &sys), ctx);
+        self.set_lang(langs::resolve("", &sys::locale()), ctx);
         self.pending.clear();
         self.send(Job::Load);
         self
@@ -1181,6 +1176,8 @@ impl App {
             return;
         };
         if self.shot_done.load(Ordering::SeqCst) {
+            // Unsaved changes must not hold a scripted run open.
+            self.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
@@ -1326,21 +1323,18 @@ impl Drop for App {
 
 /// System fonts for scripts egui's defaults lack: (name, data, script tag).
 fn system_fonts() -> Vec<(String, Arc<egui::FontData>, &'static str)> {
-    let mut v = Vec::new();
-    let mut add = |name: &str, path: &str, index: u32, tag: &'static str| {
-        if let Ok(bytes) = std::fs::read(path) {
+    let mut v: Vec<(String, Arc<egui::FontData>, &'static str)> = Vec::new();
+    for (name, path, index, tag) in sys::script_fonts() {
+        // Several candidates may be listed per font: the first that exists wins.
+        if v.iter().any(|(n, _, _)| n == name) {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&path) {
             let mut fd = egui::FontData::from_owned(bytes);
             fd.index = index;
             v.push((name.to_string(), Arc::new(fd), tag));
         }
-    };
-    let cjk = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc";
-    add("noto-cjk-jp", cjk, 0, "ja");
-    add("noto-cjk-kr", cjk, 1, "ko");
-    add("noto-cjk-sc", cjk, 2, "zh");
-    add("noto-deva", "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf", 0, "hi");
-    add("noto-thai", "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf", 0, "th");
-    add("noto-arab", "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf", 0, "ar");
+    }
     v
 }
 

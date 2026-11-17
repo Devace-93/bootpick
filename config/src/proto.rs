@@ -1,5 +1,7 @@
-//! Messages between the settings app (user) and its privileged helper (root),
-//! one JSON object per line over the helper's stdin/stdout.
+//! Messages between the settings app (user) and its privileged helper (root or
+//! an elevated administrator),
+//! one JSON object per line: over the helper's stdin/stdout on Linux, over a
+//! named pipe on Windows.
 
 use crate::host::Detection;
 use crate::menus::LoaderMenu;
@@ -129,6 +131,14 @@ pub enum Reply {
         menus: Option<Vec<LoaderMenu>>,
     },
     Error { message: String },
+}
+
+/// The app's end of the channel to a running helper.
+pub struct HelperIo {
+    pub reader: Box<dyn std::io::BufRead + Send>,
+    pub writer: Box<dyn std::io::Write + Send>,
+    /// Waits for the helper process to end.
+    pub wait: Option<Box<dyn FnOnce() + Send>>,
 }
 
 fn yes() -> bool {
