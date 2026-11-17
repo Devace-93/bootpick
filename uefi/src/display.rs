@@ -45,7 +45,7 @@ fn edid_summary(e: &[u8]) -> String {
     format!("{} '{}' native {}x{}", mfg, name.trim(), w, h)
 }
 
-fn path_text(handle: Handle) -> String {
+pub fn path_text(handle: Handle) -> String {
     match crate::esp::device_path_of(handle) {
         Some(dp) => dp.node_iter().map(|n| format!("{}", n)).collect::<Vec<_>>().join("/"),
         None => String::from("(no device path: virtual / console splitter)"),
