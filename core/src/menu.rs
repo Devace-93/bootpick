@@ -383,8 +383,8 @@ impl Menu {
             return;
         }
         if let Some(img) = self.storage.read(&format!("{}\\{}", paths::BACKGROUNDS, name)).and_then(|d| bmp::decode(&d)) {
-            let img = img.cover(self.w, self.h);
-            self.bg.blit_opaque(&img, 0, 0);
+            let (img, x, y) = img.placed(self.w, self.h, self.cfg.background_fit, self.cfg.background_zoom, self.cfg.background_x, self.cfg.background_y);
+            self.bg.blit_opaque(&img, x, y);
             // Slight shade so text stays readable on photos.
             let shade = if t.is_light() { Color::rgba(255, 255, 255, 40) } else { Color::rgba(0, 0, 0, 70) };
             self.bg.fill_rect(full, shade);

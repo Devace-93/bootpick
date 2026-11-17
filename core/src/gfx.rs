@@ -173,6 +173,41 @@ impl Image {
         out
     }
 
+    /// The part of this image that shows on a `w`x`h` screen, and where it
+    /// goes there. `zoom` is in percent of the size that just covers the
+    /// screen or, with `fit`, of the largest size that shows the whole
+    /// image; `x` and `y` (0..=100) place the image: 50 centres it, 0 and
+    /// 100 align it with an edge. Only the visible part is scaled.
+    pub fn placed(&self, w: usize, h: usize, fit: bool, zoom: u32, x: u32, y: u32) -> (Image, i32, i32) {
+        let sw = w as f32 / self.w as f32;
+        let sh = h as f32 / self.h as f32;
+        let s = (if (sw > sh) != fit { sw } else { sh }) * zoom as f32 / 100.0;
+        let mut rw = ((self.w as f32 * s + 0.5) as i32).max(1);
+        let mut rh = ((self.h as f32 * s + 0.5) as i32).max(1);
+        if !fit && zoom >= 100 {
+            rw = rw.max(w as i32);
+            rh = rh.max(h as i32);
+        }
+        let (w, h) = (w as i32, h as i32);
+        // Top-left corner of the whole scaled image on the screen.
+        let ox = (w - rw) * x.min(100) as i32 / 100;
+        let oy = (h - rh) * y.min(100) as i32 / 100;
+        // What of it is on the screen.
+        let (vx, vy) = (ox.max(0), oy.max(0));
+        let vw = ((ox + rw).min(w) - vx).max(1);
+        let vh = ((oy + rh).min(h) - vy).max(1);
+        // The same rectangle in this image.
+        let cx = (((vx - ox) as f32 / s) as usize).min(self.w - 1);
+        let cy = (((vy - oy) as f32 / s) as usize).min(self.h - 1);
+        let cw = ((vw as f32 / s + 0.5) as usize).clamp(1, self.w - cx);
+        let ch = ((vh as f32 / s + 0.5) as usize).clamp(1, self.h - cy);
+        let mut part = Image::new(cw, ch);
+        for row in 0..ch {
+            part.px[row * cw..(row + 1) * cw].copy_from_slice(&self.px[(cy + row) * self.w + cx..(cy + row) * self.w + cx + cw]);
+        }
+        (part.resized(vw as usize, vh as usize), vx, vy)
+    }
+
     /// Scale to cover `w`x`h` and crop centred.
     pub fn cover(&self, w: usize, h: usize) -> Image {
         let sw = w as f32 / self.w as f32;
@@ -493,5 +528,41 @@ impl Canvas {
     /// `BltPixel` (blue, green, red, reserved).
     pub fn pixels(&self) -> &[u32] {
         &self.px
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placed_image_stays_on_the_screen() {
+        let mut img = Image::new(40, 30);
+        for (i, p) in img.px.iter_mut().enumerate() {
+            *p = 0xff00_0000 | i as u32;
+        }
+        // Fills the screen as before when nothing is changed.
+        let (full, x, y) = img.placed(160, 90, false, 100, 50, 50);
+        assert_eq!((full.w, full.h, x, y), (160, 90, 0, 0));
+        for zoom in [20, 50, 100, 250, 400] {
+            for pos in [0, 30, 50, 100] {
+                let (part, x, y) = img.placed(160, 90, false, zoom, pos, 100 - pos);
+                assert!(x >= 0 && y >= 0 && x as usize + part.w <= 160 && y as usize + part.h <= 90, "zoom {} pos {}", zoom, pos);
+                if zoom >= 100 {
+                    assert_eq!((part.w, part.h, x, y), (160, 90, 0, 0));
+                }
+            }
+        }
+        // Smaller than the screen: centred, or against an edge.
+        let (small, x, y) = img.placed(160, 90, false, 50, 50, 0);
+        assert_eq!((small.w, small.h, x, y), (80, 60, 40, 0));
+        // The whole image: as tall as the screen, centred or to the right.
+        let (whole, x, y) = img.placed(160, 90, true, 100, 50, 50);
+        assert_eq!((whole.w, whole.h, x, y), (120, 90, 20, 0));
+        let (whole, x, _) = img.placed(160, 90, true, 100, 100, 50);
+        assert_eq!((whole.w, x), (120, 40));
+        // A square picture on a wide screen is not cut either.
+        let (square, x, y) = Image::new(50, 50).placed(160, 90, true, 100, 50, 50);
+        assert_eq!((square.w, square.h, x, y), (90, 90, 35, 0));
     }
 }
