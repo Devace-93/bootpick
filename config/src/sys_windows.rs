@@ -23,7 +23,7 @@ use windows_sys::Win32::System::Console::{AttachConsole, GetStdHandle, SetStdHan
 use windows_sys::Win32::System::Ioctl::{DISK_GEOMETRY, PARTITION_INFORMATION_EX, PARTITION_STYLE_GPT, STORAGE_DEVICE_DESCRIPTOR, STORAGE_DEVICE_NUMBER, STORAGE_PROPERTY_QUERY};
 use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken, WaitForSingleObject, INFINITE};
-use windows_sys::Win32::System::WindowsProgramming::{GetFirmwareEnvironmentVariableW, SetFirmwareEnvironmentVariableExW};
+use windows_sys::Win32::System::WindowsProgramming::{GetFirmwareEnvironmentVariableExW, SetFirmwareEnvironmentVariableExW};
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
@@ -291,27 +291,37 @@ fn enable_firmware_privilege() {
 /// The data of a firmware variable (None without elevation, on BIOS systems,
 /// or when it does not exist).
 pub fn efivar_vendor(name: &str, vendor: &str) -> Option<Vec<u8>> {
+    efivar_attrs(name, vendor).map(|(data, _)| data)
+}
+
+/// The data and the attributes of a firmware variable.
+fn efivar_attrs(name: &str, vendor: &str) -> Option<(Vec<u8>, u32)> {
     enable_firmware_privilege();
     let n = wide(name);
     let g = wide(&format!("{{{}}}", vendor));
     let mut buf = vec![0u8; 32 * 1024];
     // SAFETY: `buf` is writable for the length given; the strings are NUL-terminated.
-    let len = unsafe { GetFirmwareEnvironmentVariableW(n.as_ptr(), g.as_ptr(), buf.as_mut_ptr().cast(), buf.len() as u32) };
+    let mut attrs = 0u32;
+    let len = unsafe { GetFirmwareEnvironmentVariableExW(n.as_ptr(), g.as_ptr(), buf.as_mut_ptr().cast(), buf.len() as u32, &mut attrs) };
     if len == 0 {
         return None;
     }
     buf.truncate(len as usize);
-    Some(buf)
+    Some((buf, attrs))
 }
 
 /// Writes a firmware variable; empty data deletes it.
 fn set_efivar(name: &str, vendor: &str, data: &[u8]) -> Result<(), String> {
+    set_efivar_attrs(name, vendor, data, VAR_ATTRS)
+}
+
+fn set_efivar_attrs(name: &str, vendor: &str, data: &[u8], attrs: u32) -> Result<(), String> {
     enable_firmware_privilege();
     let n = wide(name);
     let g = wide(&format!("{{{}}}", vendor));
     let ptr = if data.is_empty() { null() } else { data.as_ptr().cast::<c_void>() };
     // SAFETY: `ptr` is valid for `data.len()` bytes (or null with length 0).
-    let ok = unsafe { SetFirmwareEnvironmentVariableExW(n.as_ptr(), g.as_ptr(), ptr, data.len() as u32, VAR_ATTRS) };
+    let ok = unsafe { SetFirmwareEnvironmentVariableExW(n.as_ptr(), g.as_ptr(), ptr, data.len() as u32, attrs) };
     if ok != 0 {
         Ok(())
     } else {
@@ -327,6 +337,11 @@ extern "system" {
 
 /// Names of the firmware variables of the EFI global vendor.
 fn global_variable_names() -> Option<Vec<String>> {
+    Some(variable_names()?.into_iter().filter(|(vendor, _)| vendor == host::EFI_GLOBAL).map(|(_, name)| name).collect())
+}
+
+/// (vendor GUID, name) of every firmware variable.
+pub fn variable_names() -> Option<Vec<(String, String)>> {
     enable_firmware_privilege();
     const NAMES: u32 = 1; // VARIABLE_INFORMATION_NAMES
     let mut len = 0u32;
@@ -344,21 +359,16 @@ fn global_variable_names() -> Option<Vec<String>> {
     }
     // SAFETY: the same allocation viewed as bytes, limited to what was written.
     let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), (len as usize).min(buf.len() * 4)) };
-    let global: Vec<u8> = {
-        // 8be4df61-93ca-11d2-aa0d-00e098032b8c in its in-memory layout.
-        let g = GUID { data1: 0x8be4df61, data2: 0x93ca, data3: 0x11d2, data4: [0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c] };
-        guid_bytes(&g).to_vec()
-    };
     let mut names = Vec::new();
     let mut at = 0usize;
     // Each entry: u32 offset of the next one (0 = last), 16-byte vendor GUID, UTF-16 name.
     while at + 20 <= bytes.len() {
         let next = u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize;
         let end = if next == 0 { bytes.len() } else { (at + next).min(bytes.len()) };
-        if bytes[at + 4..at + 20] == global[..] {
-            let name: Vec<u16> = bytes[at + 20..end].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|c| *c != 0).collect();
-            names.push(String::from_utf16_lossy(&name));
-        }
+        let g = &bytes[at + 4..at + 20];
+        let vendor = GUID { data1: u32::from_le_bytes([g[0], g[1], g[2], g[3]]), data2: u16::from_le_bytes([g[4], g[5]]), data3: u16::from_le_bytes([g[6], g[7]]), data4: [g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15]] };
+        let name: Vec<u16> = bytes[at + 20..end].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|c| *c != 0).collect();
+        names.push((guid_string(&vendor), String::from_utf16_lossy(&name)));
         if next == 0 {
             break;
         }
@@ -392,7 +402,90 @@ pub fn boot_set_active(n: u16, active: bool) -> Result<(), String> {
 
 pub fn boot_set_order(order: &[u16]) -> Result<(), String> {
     let data: Vec<u8> = order.iter().flat_map(|n| n.to_le_bytes()).collect();
-    set_efivar("BootOrder", host::EFI_GLOBAL, &data)
+    set_efivar("BootOrder", host::EFI_GLOBAL, &data)?;
+    set_physical_order(order)?;
+    match order.first() {
+        Some(first) => hp_promote(*first),
+        None => Ok(()),
+    }
+}
+
+const HP_VENDOR: &str = "30fef3a5-ba29-4767-9f11-7c7fd606ffa6";
+
+/// HP's list of operating system loaders ("OS Boot Manager" in the firmware
+/// setup), in the order it starts them: `Name (disk model);Name (disk model)`.
+pub fn hp_os_order() -> Option<String> {
+    let (data, _) = efivar_attrs("HUOOL", HP_VENDOR)?;
+    let text: Vec<u16> = data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    Some(String::from_utf16_lossy(&text).trim_end_matches('\0').to_string())
+}
+
+/// The hard drive node of a load option's device path, when it has one.
+fn hd_node(option: &[u8]) -> Option<&[u8]> {
+    option.windows(4).position(|w| w == [0x04, 0x01, 42, 0]).and_then(|i| option.get(i..i + 42))
+}
+
+/// HP firmware orders the loaders on the internal disk by its own list of
+/// their names (the `HUOOL` variable) and rewrites BootOrder and
+/// PhysicalBootOrder from it at every start. When the list exists, the entry
+/// that was just made first is moved to (or added at) its front.
+fn hp_promote(n: u16) -> Result<(), String> {
+    let Some((raw, attrs)) = efivar_attrs("HUOOL", HP_VENDOR) else { return Ok(()) };
+    // Only loaders on a disk are in the list (not "EFI USB Device" and the like).
+    let Some(option) = host::efivar(&format!("Boot{:04X}", n)) else { return Ok(()) };
+    let (Some(node), Some((_, name))) = (hd_node(&option), bootpick_core::scan::parse_load_option(&option)) else { return Ok(()) };
+    let units: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let nuls = units.iter().rev().take_while(|c| **c == 0).count();
+    let text = String::from_utf16_lossy(&units[..units.len() - nuls]);
+    let trailing = text.ends_with(';');
+    let items: Vec<&str> = text.split(';').filter(|i| !i.is_empty()).collect();
+    let name_of = |item: &str| item.rsplit_once(" (").map(|(a, _)| a.to_string()).unwrap_or_else(|| item.to_string());
+    if items.first().map(|i| name_of(i)) == Some(name.clone()) {
+        return Ok(());
+    }
+    // " (disk model)": taken from the entry itself when the firmware already
+    // listed it, else from another loader on the same partition, else from
+    // the first item.
+    let same_partition: Vec<String> = boot_numbers().into_iter().filter_map(|b| host::efivar(&format!("Boot{:04X}", b))).filter(|d| hd_node(d) == Some(node)).filter_map(|d| bootpick_core::scan::parse_load_option(&d).map(|(_, desc)| desc)).collect();
+    let suffix_of = |item: &&str| item.rfind(" (").map(|i| item[i..].to_string());
+    let suffix = items.iter().find(|i| name_of(i) == name).and_then(|i| suffix_of(i)).or_else(|| items.iter().find(|i| same_partition.contains(&name_of(i))).and_then(|i| suffix_of(i))).or_else(|| items.iter().find_map(|i| suffix_of(i)));
+    let Some(suffix) = suffix else { return Ok(()) };
+    let mut new: Vec<String> = vec![format!("{}{}", name, suffix)];
+    new.extend(items.iter().filter(|i| name_of(i) != name).map(|i| i.to_string()));
+    let mut out = new.join(";");
+    if trailing {
+        out.push(';');
+    }
+    let data: Vec<u8> = out.encode_utf16().chain(std::iter::repeat(0).take(nuls)).flat_map(u16::to_le_bytes).collect();
+    let written = set_efivar_attrs("HUOOL", HP_VENDOR, &data, attrs);
+    if written.is_ok() && efivar_attrs("HUOOL", HP_VENDOR).map(|(d, _)| d) == Some(data) {
+        Ok(())
+    } else {
+        Err("this HP firmware keeps its own list of boot loaders and it could not be changed: move the entry up in the firmware setup (Boot Options, OS Boot Manager)".into())
+    }
+}
+
+/// Insyde firmware keeps the order it really uses in its own
+/// `PhysicalBootOrder` and rebuilds BootOrder from it at every start, so an
+/// entry put first only in BootOrder is back at the end after a restart.
+/// When the variable exists, it gets the same order: its own entries in the
+/// new sequence, plus the entry that is now first.
+fn set_physical_order(order: &[u16]) -> Result<(), String> {
+    const INSYDE_GENERIC: &str = "59d1c24f-50f1-401a-b101-f33e0daed443";
+    let read = || efivar_attrs("PhysicalBootOrder", INSYDE_GENERIC).map(|(d, attrs)| (d.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect::<Vec<u16>>(), attrs));
+    let Some((old, attrs)) = read() else { return Ok(()) };
+    let new: Vec<u16> = order.iter().copied().filter(|n| old.contains(n) || order.first() == Some(n)).collect();
+    if new == old {
+        return Ok(());
+    }
+    let data: Vec<u8> = new.iter().flat_map(|n| n.to_le_bytes()).collect();
+    let written = set_efivar_attrs("PhysicalBootOrder", INSYDE_GENERIC, &data, attrs);
+    // Read back: this is the variable that decides what starts.
+    if written.is_ok() && read().map(|(now, _)| now) == Some(new) {
+        Ok(())
+    } else {
+        Err("the firmware keeps its own boot order (PhysicalBootOrder) and it could not be changed: set the order in the firmware setup".into())
+    }
 }
 
 /// Deletes Boot#### and takes it out of BootOrder.

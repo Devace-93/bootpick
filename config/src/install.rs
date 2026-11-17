@@ -31,7 +31,13 @@ struct Opts {
 
 pub fn run(args: &[String]) -> ! {
     sys::attach_console();
-    let result = if args.iter().any(|a| a == "--probe") { probe() } else { parse(args).and_then(install) };
+    let result = if args.iter().any(|a| a == "--vars") {
+        dump_vars()
+    } else if args.iter().any(|a| a == "--probe") {
+        probe()
+    } else {
+        parse(args).and_then(install)
+    };
     let _ = std::io::stdout().flush();
     match result {
         Ok(()) => std::process::exit(0),
@@ -285,6 +291,22 @@ fn make_shortcut(lnk: &Path, target: &Path) -> bool {
         && lnk.is_file()
 }
 
+/// `--probe --vars`: every firmware variable (vendor, name, size, start of
+/// the data). For working out how a firmware keeps its boot order.
+fn dump_vars() -> Result<(), String> {
+    let names = sys::variable_names().ok_or("the firmware variables cannot be listed (run elevated)")?;
+    for (vendor, name) in names {
+        match sys::efivar_vendor(&name, &vendor) {
+            Some(d) => {
+                let hex: String = d.iter().take(160).map(|b| format!("{:02x}", b)).collect();
+                println!("{} {} [{}] {}{}", vendor, name, d.len(), hex, if d.len() > 160 { "..." } else { "" });
+            }
+            None => println!("{} {} [unreadable]", vendor, name),
+        }
+    }
+    Ok(())
+}
+
 /// `--probe`: what the installer sees on this computer. Changes nothing.
 fn probe() -> Result<(), String> {
     let elevated = sys::is_elevated();
@@ -341,6 +363,12 @@ fn probe() -> Result<(), String> {
     println!("secure boot: {}", if secure_boot() { "on" } else { "off" });
     let order = host::boot_order();
     println!("boot order: {}", order.iter().map(|n| format!("{:04X}", n)).collect::<Vec<_>>().join(","));
+    if let Some(list) = sys::hp_os_order() {
+        println!("firmware's own loader list (HP HUOOL): {}", list);
+    }
+    if let Some(d) = sys::efivar_vendor("PhysicalBootOrder", "59d1c24f-50f1-401a-b101-f33e0daed443") {
+        println!("firmware's own order (Insyde PhysicalBootOrder): {}", d.chunks_exact(2).map(|c| format!("{:04X}", u16::from_le_bytes([c[0], c[1]]))).collect::<Vec<_>>().join(","));
+    }
     for (n, active, desc) in host::all_boot_options() {
         println!("  Boot{:04X}{} {}", n, if active { "*" } else { " " }, desc);
     }

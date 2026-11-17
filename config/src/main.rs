@@ -6,6 +6,7 @@
 //!   bootpick-config --install [--source DIR] [--keep|--reset] [--no-boot-entry] [--no-app] [--uninstall]
 //!                                      Windows installer (elevated; run by install.ps1)
 //!   bootpick-config --probe            Windows: print what the installer sees, change nothing
+//!   bootpick-config --probe --vars     Windows: list every firmware variable
 //!   bootpick-config --upgrade-menus    rewrite GRUB blocks from an older bootpick (root; install.sh)
 //!   bootpick-config --demo DIR[:LABEL][,DIR2[:LABEL]] [--demo-root UUID=DIR]...
 //!                                      use plain directories as EFI volumes (no root)
