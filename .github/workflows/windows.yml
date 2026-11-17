@@ -1,0 +1,57 @@
+# Builds and tests on Windows and makes the release files (the single-file
+# installer and the zip) from the source of this repository, on a
+# GitHub-hosted runner. The files are kept as a workflow artifact.
+#
+# Releases are meant to be signed through SignPath (see
+# site/code-signing-policy.html). Signing needs builds that come from here,
+# not from a developer's computer; the signing steps are added to this
+# workflow once the project is accepted:
+#   1. sign target\release\bootpick-config.exe (the settings app);
+#   2. tools\package.ps1 <tag> -SignedApp <that file>, which packs the signed
+#      app into the installer;
+#   3. sign the installer.
+name: Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore: ["site/**", "**.md"]
+  pull_request:
+    paths-ignore: ["site/**", "**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add x86_64-unknown-uefi
+      - name: Test
+        run: cargo test
+      - name: Build and package
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0, 7))" }
+          tools\package.ps1 $version
+      - name: File properties of the program
+        shell: pwsh
+        run: |
+          $info = (Get-Item target\release\bootpick-config.exe).VersionInfo
+          $info | Format-List ProductName, FileDescription, ProductVersion, FileVersion, OriginalFilename
+          if ($info.ProductName -ne 'bootpick') { throw 'the program has no file properties' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bootpick-windows-unsigned
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error

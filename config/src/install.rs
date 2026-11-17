@@ -42,7 +42,8 @@ pub fn run(args: &[String]) -> ! {
     } else if args.iter().any(|a| a == "--probe") {
         probe()
     } else if let Some(i) = args.iter().position(|a| a == "--make-setup") {
-        make_setup(args.get(i + 1).map(Path::new), args.iter().position(|a| a == "--source").and_then(|i| args.get(i + 1)).map(Path::new))
+        let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(Path::new);
+        make_setup(args.get(i + 1).map(Path::new), value("--source"), value("--app"))
     } else {
         parse(args).and_then(install)
     };
@@ -155,20 +156,51 @@ fn payload_span() -> Option<(u64, u64)> {
     span_of(&std::env::current_exe().ok()?)
 }
 
+/// The entry of a Windows program's header that says where its digital
+/// signature is: (position of the entry, start of the signature, its length).
+fn signature_entry(head: &[u8]) -> Option<(usize, u64, u64)> {
+    let u32_at = |i: usize| head.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let pe = u32_at(0x3C)? as usize;
+    if head.get(pe..pe + 4)? != b"PE\0\0" {
+        return None;
+    }
+    let opt = pe + 24;
+    let dirs = match head.get(opt..opt + 2)? {
+        [0x0b, 0x02] => opt + 112,
+        [0x0b, 0x01] => opt + 96,
+        _ => return None,
+    };
+    if u32_at(dirs - 4)? < 5 {
+        return None;
+    }
+    // The fifth directory; unlike the others it holds a position in the file.
+    let entry = dirs + 4 * 8;
+    Some((entry, u64::from(u32_at(entry)?), u64::from(u32_at(entry + 4)?)))
+}
+
+/// A signed installer has its signature after the packed files (signing
+/// adds it at the end of the file, after padding to a multiple of 8 bytes):
+/// the trailer is then looked for in front of the signature.
 fn span_of(file: &Path) -> Option<(u64, u64)> {
     let mut f = fs::File::open(file).ok()?;
     let total = f.metadata().ok()?.len();
-    if total < TRAILER {
-        return None;
+    let mut head = Vec::new();
+    Read::by_ref(&mut f).take(4096).read_to_end(&mut head).ok()?;
+    let end = match signature_entry(&head) {
+        Some((_, start, len)) if len > 0 && start + len == total => start,
+        _ => total,
+    };
+    for pad in 0..8 {
+        let Some(at) = end.checked_sub(pad + TRAILER) else { break };
+        f.seek(SeekFrom::Start(at)).ok()?;
+        let mut tail = [0u8; TRAILER as usize];
+        f.read_exact(&mut tail).ok()?;
+        if &tail[8..] == MAGIC {
+            let len = u64::from_le_bytes(tail[..8].try_into().ok()?);
+            return (len <= at).then(|| (at - len, len));
+        }
     }
-    f.seek(SeekFrom::End(-(TRAILER as i64))).ok()?;
-    let mut tail = [0u8; TRAILER as usize];
-    f.read_exact(&mut tail).ok()?;
-    if &tail[8..] != MAGIC {
-        return None;
-    }
-    let len = u64::from_le_bytes(tail[..8].try_into().ok()?);
-    (len <= total - TRAILER).then(|| (total - TRAILER - len, len))
+    None
 }
 
 /// Whether this program carries the files to install.
@@ -182,13 +214,25 @@ fn program_bytes() -> Result<Vec<u8>, String> {
     let mut bytes = fs::read(&exe).map_err(|e| format!("{}: {}", exe.display(), e))?;
     if let Some((n, _)) = payload_span() {
         bytes.truncate(n as usize);
+        // A signature of the installer does not cover this part alone: a
+        // header that still points to it would make the file look damaged.
+        if let Some((entry, start, _)) = signature_entry(&bytes[..bytes.len().min(4096)]) {
+            if start >= n {
+                bytes[entry..entry + 8].fill(0);
+            }
+        }
     }
     Ok(bytes)
 }
 
+/// The settings app, when it is packed as a file of its own: a signed
+/// release packs the signed app, since the part of a signed installer in
+/// front of the packed files is not a signed program by itself.
+const APP_FILE: &str = "bootpick-config.exe";
+
 /// Only the names the installer writes: no path can leave `\EFI\bootpick`.
 fn valid_name(name: &str) -> bool {
-    if name == "bootpick.efi" || name == "bootpick.conf" {
+    if name == "bootpick.efi" || name == "bootpick.conf" || name == APP_FILE {
         return true;
     }
     match name.split_once('/') {
@@ -250,11 +294,16 @@ fn pack(src: &Source) -> Result<Vec<u8>, String> {
     enc.finish().map_err(|e| e.to_string())
 }
 
-/// `--make-setup OUT.exe [--source DIR]`: a copy of this program with the
-/// files to install packed at its end.
-fn make_setup(out: Option<&Path>, source: Option<&Path>) -> Result<(), String> {
+/// `--make-setup OUT.exe [--source DIR] [--app APP.exe]`: a copy of this
+/// program with the files to install packed at its end. With `--app`, that
+/// program is packed too and is what gets installed as the settings app.
+fn make_setup(out: Option<&Path>, source: Option<&Path>, app: Option<&Path>) -> Result<(), String> {
     let out = out.ok_or("--make-setup needs the name of the file to write")?;
-    let src = load_source(source)?;
+    let mut src = load_source(source)?;
+    src.retain(|(n, _)| n != APP_FILE);
+    if let Some(app) = app {
+        src.push((APP_FILE.into(), fs::read(app).map_err(|e| format!("{}: {}", app.display(), e))?));
+    }
     let packed = pack(&src)?;
     let mut bytes = program_bytes()?;
     let program = bytes.len();
@@ -399,7 +448,7 @@ pub fn install(o: Opts) -> Result<(), String> {
     }
     if fresh {
         // EFI partitions are small: check before filling one half way.
-        let needed = src.iter().map(|(_, d)| d.len() as u64).sum::<u64>() + (1 << 20);
+        let needed = src.iter().filter(|(n, _)| n != APP_FILE).map(|(_, d)| d.len() as u64).sum::<u64>() + (1 << 20);
         if let Some(free) = sys::free_space(&m.dir) {
             if free < needed {
                 return Err(format!("not enough free space on {}: {} MB needed, {} MB free", describe(&esp), needed.div_ceil(1 << 20), free >> 20));
@@ -411,6 +460,10 @@ pub fn install(o: Opts) -> Result<(), String> {
         // Settings and bundled backgrounds only on a fresh install: the user
         // may have changed the first and removed some of the second.
         if !fresh && (name == "bootpick.conf" || name.starts_with("backgrounds/")) {
+            continue;
+        }
+        // Goes to Program Files, not to the EFI partition.
+        if name == APP_FILE {
             continue;
         }
         let path = name.split('/').fold(dest.clone(), |p, c| p.join(c));
@@ -441,7 +494,11 @@ pub fn install(o: Opts) -> Result<(), String> {
         if exe != target {
             fs::create_dir_all(sys::app_dir()).map_err(|e| format!("{}: {}", sys::app_dir().display(), e))?;
             // Without the packed files when this is the single-file installer.
-            fs::write(&target, program_bytes()?).map_err(|e| format!("{}: {} (close bootpick settings and try again)", target.display(), e))?;
+            let program = match src.iter().find(|(n, _)| n == APP_FILE) {
+                Some((_, packed)) => packed.clone(),
+                None => program_bytes()?,
+            };
+            fs::write(&target, program).map_err(|e| format!("{}: {} (close bootpick settings and try again)", target.display(), e))?;
         }
         for (name, r) in menus::upgrade(&Env::Real { parts: &parts }) {
             match r {
@@ -583,6 +640,47 @@ mod tests {
         let packed = pack(&src).unwrap();
         assert_eq!(unpack_bytes(&packed).unwrap(), src);
         assert!(unpack_bytes(&packed[..packed.len() / 2]).is_err());
+    }
+
+    /// A file shaped like a Windows program: header, the rest, and when
+    /// `signed` a signature at the end that the header points to.
+    fn fake_program(body: &[u8], signed: bool) -> Vec<u8> {
+        let mut f = vec![0u8; 0x200];
+        f[0x3C] = 0x40;
+        f[0x40..0x44].copy_from_slice(b"PE\0\0");
+        f[0x58..0x5A].copy_from_slice(&[0x0b, 0x02]);
+        f[0x58 + 108] = 16;
+        f.extend_from_slice(body);
+        if signed {
+            while f.len() % 8 != 0 {
+                f.push(0);
+            }
+            let start = f.len() as u32;
+            f[0xE8..0xEC].copy_from_slice(&start.to_le_bytes());
+            f[0xEC..0xF0].copy_from_slice(&100u32.to_le_bytes());
+            f.extend_from_slice(&[7; 100]);
+        }
+        f
+    }
+
+    #[test]
+    fn packed_files_are_found_in_a_signed_installer() {
+        let src: Source = vec![("bootpick.efi".into(), vec![9; 301]), (APP_FILE.into(), vec![1, 2, 3])];
+        let packed = pack(&src).unwrap();
+        let mut body = packed.clone();
+        body.extend_from_slice(&(packed.len() as u64).to_le_bytes());
+        body.extend_from_slice(MAGIC);
+        for signed in [false, true] {
+            let file = std::env::temp_dir().join(format!("bootpick-test-{}-{}.bin", std::process::id(), signed));
+            fs::write(&file, fake_program(&body, signed)).unwrap();
+            let found = (span_of(&file), unpack_file(&file));
+            let _ = fs::remove_file(&file);
+            assert_eq!(found.0, Some((0x200, packed.len() as u64)), "signed: {}", signed);
+            assert_eq!(found.1.unwrap(), src);
+        }
+        // The header of a signed program without packed files, and of something else.
+        assert_eq!(signature_entry(&fake_program(b"", true)), Some((0xE8, 0x200, 100)));
+        assert_eq!(signature_entry(b"not a program"), None);
     }
 
     #[test]
