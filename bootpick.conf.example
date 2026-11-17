@@ -1,6 +1,10 @@
 # bootpick configuration. Edited from the Settings screen (gear icon) or by hand.
 theme = midnight          # midnight | pop | nord | ember | light
 background = none         # none, or a file name from EFI\bootpick\backgrounds\
+#background_mode = fill   # fill = the image fills the screen (the rest is cut off), fit = the whole image shows
+#background_zoom = 100    # size of the image in percent of that, 20..400
+#background_x = 50        # where the image sits, 0..100: 0 = left, 50 = centred, 100 = right
+#background_y = 50        # the same from top (0) to bottom (100)
 timeout = 10              # seconds before the default entry starts: 5, 10, 15 ... 60
 default = @last           # @last = whatever was started last time, or an entry id
 mouse_speed = 8           # 1..64, pixels per millimetre of mouse travel

@@ -17,10 +17,24 @@ pub struct EntryPref {
     pub hidden: Option<bool>,
 }
 
+/// Range of `background_zoom`.
+pub const BG_ZOOM_MIN: u32 = 20;
+pub const BG_ZOOM_MAX: u32 = 400;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub theme: String,
     pub background: String,
+    /// What 100 % means for the background image: false = it fills the
+    /// screen (what does not fit is cut off), true = the whole image fits
+    /// on the screen (the theme gradient shows around it).
+    pub background_fit: bool,
+    /// Size of the background image in percent of that.
+    pub background_zoom: u32,
+    /// Where the image sits, in percent of the room there is to move it:
+    /// 0 = left / top, 50 = centred, 100 = right / bottom.
+    pub background_x: u32,
+    pub background_y: u32,
     pub timeout: u32,
     pub default_entry: String,
     pub mouse_speed: u32,
@@ -35,6 +49,10 @@ impl Default for Config {
         Self {
             theme: "midnight".into(),
             background: String::new(),
+            background_fit: false,
+            background_zoom: 100,
+            background_x: 50,
+            background_y: 50,
             timeout: 10,
             default_entry: String::new(),
             mouse_speed: 8,
@@ -103,6 +121,10 @@ impl Config {
                 Section::Global => match k.as_str() {
                     "theme" => cfg.theme = v.to_ascii_lowercase(),
                     "background" => cfg.background = if v.eq_ignore_ascii_case("none") { String::new() } else { v.into() },
+                    "background_mode" => cfg.background_fit = v.eq_ignore_ascii_case("fit"),
+                    "background_zoom" => cfg.background_zoom = v.parse().unwrap_or(100).clamp(BG_ZOOM_MIN, BG_ZOOM_MAX),
+                    "background_x" => cfg.background_x = v.parse().unwrap_or(50).min(100),
+                    "background_y" => cfg.background_y = v.parse().unwrap_or(50).min(100),
                     "timeout" => cfg.timeout = normalize_timeout(v.parse::<u32>().unwrap_or(10)),
                     "default" => cfg.default_entry = v.into(),
                     "mouse_speed" => cfg.mouse_speed = v.parse().unwrap_or(8).clamp(1, 64),
@@ -120,6 +142,13 @@ impl Config {
         s.push_str("# bootpick configuration: edited from the boot menu (gear icon),\n# the \"bootpick settings\" app, or by hand.\n");
         s.push_str(&format!("theme = {}\n", self.theme));
         s.push_str(&format!("background = {}\n", if self.background.is_empty() { "none" } else { &self.background }));
+        // Only when changed, so an untouched file stays as it was.
+        if self.background_fit {
+            s.push_str("background_mode = fit\n");
+        }
+        if (self.background_zoom, self.background_x, self.background_y) != (100, 50, 50) {
+            s.push_str(&format!("background_zoom = {}\nbackground_x = {}\nbackground_y = {}\n", self.background_zoom, self.background_x, self.background_y));
+        }
         s.push_str(&format!("timeout = {}\n", self.timeout));
         s.push_str(&format!("default = {}\n", self.default_entry));
         s.push_str(&format!("mouse_speed = {}\n", self.mouse_speed));
@@ -314,6 +343,18 @@ pub fn builtin_themes() -> Vec<Theme> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_placement_round_trip() {
+        let plain = Config::parse("background = webb.bmp");
+        assert_eq!((plain.background_zoom, plain.background_x, plain.background_y), (100, 50, 50));
+        assert!(!plain.serialize().contains("background_zoom"));
+        assert!(!plain.background_fit);
+        let c = Config::parse("background = webb.bmp\nbackground_mode = fit\nbackground_zoom = 9000\nbackground_x = 0\nbackground_y = 250");
+        assert_eq!((c.background_zoom, c.background_x, c.background_y), (BG_ZOOM_MAX, 0, 100));
+        assert!(c.background_fit);
+        assert_eq!(Config::parse(&c.serialize()), c);
+    }
 
     #[test]
     fn custom_theme_round_trip() {

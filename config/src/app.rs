@@ -8,7 +8,7 @@ use crate::menus::{self, LoaderMenu, MenuKind, Problem};
 use crate::imaging;
 use crate::proto::{HelperIo, LoadReply, Reply, Request, ScanJ};
 use crate::sys;
-use bootpick_core::config::{builtin_themes, normalize_timeout, Config, EntryPref, Theme, THEME_FIELDS};
+use bootpick_core::config::{BG_ZOOM_MAX, BG_ZOOM_MIN, builtin_themes, normalize_timeout, Config, EntryPref, Theme, THEME_FIELDS};
 use bootpick_core::gfx::{Canvas, Color};
 use bootpick_core::langs;
 use bootpick_core::menu::{build_items, Menu, MenuOptions, DEFAULT_LAST};
@@ -827,7 +827,12 @@ impl App {
                     r
                 } else {
                     match self.bmp_texture(&ctx, bootpick_core::paths::BACKGROUNDS, n, 256) {
-                        Some(t) => ui.add(egui::Image::new((t.id(), thumb)).sense(egui::Sense::click())),
+                        Some(t) => {
+                            // The whole picture, whatever its shape.
+                            let size = t.size_vec2();
+                            let scale = (thumb.x / size.x).min(thumb.y / size.y);
+                            ui.add(egui::Image::new((t.id(), size * scale)).sense(egui::Sense::click()))
+                        }
                         None => ui.add_sized(thumb, egui::Button::new(n.as_str())),
                     }
                 };
@@ -840,6 +845,25 @@ impl App {
                 }
             }
         });
+        if !self.cfg.background.is_empty() {
+            // Size and position of the image on the screen.
+            let before = (self.cfg.background_fit, self.cfg.background_zoom, self.cfg.background_x, self.cfg.background_y);
+            let (size, across, down, reset) = (self.t(T::bg_size), self.t(T::bg_x), self.t(T::bg_y), self.t(T::bg_reset));
+            let (fill, fit) = (self.t(T::bg_fill), self.t(T::bg_fit));
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut self.cfg.background_fit, false, fill);
+                ui.radio_value(&mut self.cfg.background_fit, true, fit);
+            });
+            ui.add(egui::Slider::new(&mut self.cfg.background_zoom, BG_ZOOM_MIN..=BG_ZOOM_MAX).suffix(" %").text(size));
+            ui.add(egui::Slider::new(&mut self.cfg.background_x, 0..=100).suffix(" %").text(across));
+            ui.add(egui::Slider::new(&mut self.cfg.background_y, 0..=100).suffix(" %").text(down));
+            if ui.add_enabled((before.1, before.2, before.3) != (100, 50, 50), egui::Button::new(reset)).clicked() {
+                (self.cfg.background_zoom, self.cfg.background_x, self.cfg.background_y) = (100, 50, 50);
+            }
+            if before != (self.cfg.background_fit, self.cfg.background_zoom, self.cfg.background_x, self.cfg.background_y) {
+                self.preview_dirty = true;
+            }
+        }
         ui.horizontal(|ui| {
             if ui.button(self.t(T::add_image)).clicked() {
                 if let Some(path) = rfd::FileDialog::new().add_filter(self.t(T::images), &["png", "jpg", "jpeg", "webp", "bmp"]).pick_file() {

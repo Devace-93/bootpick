@@ -109,9 +109,21 @@ pub fn import_logo(path: &Path) -> Result<Vec<u8>, String> {
 
 /// A wallpaper scaled to cover 1920x1080 and cropped centred.
 pub fn import_background(path: &Path) -> Result<Vec<u8>, String> {
+    // The picture keeps its shape: how it sits on the screen (filling it,
+    // shown whole, size, position) is chosen in the settings. Only made
+    // smaller: no wider than a Full HD screen, and within the size the
+    // helper accepts for a background.
+    const MAX_WIDTH: u32 = 1920;
+    const MAX_BYTES: f64 = 15.0 * 1024.0 * 1024.0;
     let img = open(path)?;
-    let filled = img.resize_to_fill(1920, 1080, FilterType::Lanczos3).to_rgb8();
-    Ok(bmp24(&filled))
+    let (w, h) = img.dimensions();
+    let mut scale = (MAX_WIDTH as f64 / w as f64).min(1.0);
+    let bytes = (w as f64 * scale) * (h as f64 * scale) * 3.0;
+    if bytes > MAX_BYTES {
+        scale *= (MAX_BYTES / bytes).sqrt();
+    }
+    let img = if scale < 1.0 { img.resize(((w as f64 * scale) as u32).max(1), ((h as f64 * scale) as u32).max(1), FilterType::Lanczos3) } else { img };
+    Ok(bmp24(&img.to_rgb8()))
 }
 
 /// Decodes one of our BMPs into RGBA (straight alpha) for a thumbnail.
