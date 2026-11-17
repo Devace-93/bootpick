@@ -8,8 +8,9 @@
 // in FALLBACK are used.
 (function () {
   const REPO = 'Devace-93/bootpick';
-  // File name endings of the packages made by tools/package.sh and tools/package.ps1.
-  const SUFFIX = { linux: '-x86_64-linux.tar.gz', windows: '-x86_64-windows.zip' };
+  // File name endings of the packages made by tools/package.sh and
+  // tools/package.ps1, the preferred one first.
+  const SUFFIX = { linux: ['-x86_64-linux.tar.gz'], windows: ['-x86_64-windows-setup.exe', '-x86_64-windows.zip'] };
   const NAMES = { linux: 'Linux', windows: 'Windows' };
   const FALLBACK = {
     linux: 'https://github.com/' + REPO + '/releases/download/v0.2.0-beta/bootpick-v0.2.0-beta-x86_64-linux.tar.gz',
@@ -54,8 +55,11 @@
           if (rel.draft) return;
           Object.keys(SUFFIX).forEach((k) => {
             if (found[k]) return;
-            const asset = (rel.assets || []).find((x) => typeof x.name === 'string' && x.name.endsWith(SUFFIX[k]));
-            if (asset) found[k] = asset.browser_download_url;
+            SUFFIX[k].some((suffix) => {
+              const asset = (rel.assets || []).find((x) => typeof x.name === 'string' && x.name.endsWith(suffix));
+              if (asset) found[k] = asset.browser_download_url;
+              return !!asset;
+            });
           });
         });
         Object.assign(urls, found);
