@@ -264,8 +264,9 @@ plain folders (used for the screenshots above).
 ## Code signing policy
 
 Free code signing provided by [SignPath.io](https://signpath.io), certificate
-by [SignPath Foundation](https://signpath.org). The application is in
-progress: until it is accepted the Windows files are not signed. The Windows
+by [SignPath Foundation](https://signpath.org). Signing is planned and
+the application has not been sent yet: until it is accepted the Windows files
+are not signed. The Windows
 installer and settings app are built from this repository by
 `.github/workflows/windows.yml` on GitHub-hosted runners. Roles, privacy
 policy and details: [Code signing policy](https://bootpick.3m4.net/code-signing-policy.html).
