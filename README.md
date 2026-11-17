@@ -70,6 +70,10 @@ sudo ./install.sh                   # or first: tools/make-usb.sh /media/$USER/M
 
 Release tarballs are made with `tools/package.sh <tag>`.
 
+On Windows the package is a zip made with `tools\package.ps1 <tag>`
+(`bootpick-<tag>-x86_64-windows.zip`): extract it and double-click
+`install.cmd`. See [Install from Windows](#install-from-windows).
+
 ## Build
 
 ```sh
@@ -80,6 +84,12 @@ It runs `cargo build --release --target x86_64-unknown-uefi --manifest-path
 uefi/Cargo.toml`, `cargo build --release -p bootpick-config` and, when the
 generated assets are missing, `tools/build-assets.py` (icons, wallpapers,
 flags and font subsets; needs `uv`, cairo and the Noto fonts).
+
+On Windows, `tools\build.ps1` does the same from PowerShell. The generated
+assets cannot be built there (cairo and the Noto fonts), so the script takes
+them from a release. Any Rust toolchain for Windows works; without Visual
+Studio, install `stable-x86_64-pc-windows-gnullvm` next to the default
+`stable-x86_64-pc-windows-gnu` and the script handles the linker.
 
 ## Try it in QEMU
 
@@ -136,10 +146,48 @@ instead of adding a second one, and asks whether to keep its settings
 `--reset` answer that question without asking. Install the app from each
 Linux you want to change the settings from: all of them edit the same copy.
 
+### Install from Windows
+
+```bat
+powershell -ExecutionPolicy Bypass -File tools\make-usb.ps1 E:
+install.cmd
+install.cmd -Uninstall
+```
+
+The first line is optional: it puts bootpick on a FAT32 USB stick to try it
+before installing. `install.cmd` asks for administrator rights (UAC). It is a
+wrapper around `install.ps1` (options `-Keep`, `-Reset`, `-NoBootEntry`,
+`-NoApp`, `-Uninstall`) and does what `install.sh` does on Linux: it copies
+the menu to `\EFI\bootpick` on the EFI System Partition, adds a firmware boot
+entry first in the boot order, installs **bootpick settings** in
+`C:\Program Files\bootpick` with a Start menu shortcut, and opens it. The
+Windows boot manager stays where it is.
+
+If bootpick is already installed on any EFI partition of the computer (for
+example from Linux), the installer finds it, updates that copy in place and
+keeps its settings; the app on Windows and the apps on Linux all edit the
+same copy. `bootpick-config.exe --probe` (from an administrator prompt)
+prints what the installer sees without changing anything.
+
+Things that differ on Windows:
+
+- With **BitLocker** on the system drive, starting Windows through a new
+  first boot entry makes it ask for the recovery key. The installer warns
+  and asks before continuing.
+- The installer warns when **Secure Boot** is on (bootpick is not signed).
+- Windows cannot read Linux file systems, so from Windows the app cannot
+  hide a GRUB menu whose files are on ext4/btrfs (it is listed as not
+  readable) and does not look up the real OS name behind a GRUB loader.
+  Names and hidden menus set from Linux are kept. systemd-boot menus, and
+  GRUB installations that keep their files on the EFI partition, work.
+- Some firmware and some Windows updates put "Windows Boot Manager" back
+  first in the boot order; open the app and press "Enable bootpick" again.
+
 ### The settings app
 
 `bootpick-config` runs as your user and asks for authorization once
-(`pkexec bootpick-config --helper`). The helper copies `\EFI\bootpick` to a
+(`pkexec bootpick-config --helper`; on Windows a UAC prompt, the helper then
+talks to the app over a named pipe). The helper copies `\EFI\bootpick` to a
 private staging folder, the app edits that copy, and Save writes back only
 `bootpick.conf`, `icons\*.bmp` and `backgrounds\*.bmp` (regular files, size
 limited). "Disable bootpick" marks its firmware entry inactive so the next
@@ -189,7 +237,7 @@ plain folders (used for the screenshots above).
   are scaled to cover the screen). Add your own with
   `tools/build-assets.py` after dropping a JPEG/PNG in `assets/backgrounds/`.
 - Themes are built in (`midnight`, `pop`, `nord`, `ember`, `light`); see
-  `src/config.rs` to add one.
+  `core/src/config.rs` to add one.
 
 ## Layout
 
@@ -197,9 +245,9 @@ plain folders (used for the screenshots above).
 | --- | --- |
 | `core/` | `no_std` library shared by both programs: renderer (`gfx`), text shaping and font fallback (`text`), BMP, config and themes, i18n, scanning rules (`scan`), the menu state machine (`menu`) |
 | `uefi/` | the boot menu: GOP output, mouse/keyboard input, volume and firmware scanning, chainloading, breadcrumb log |
-| `config/` | the desktop settings app (egui) and its privileged helper |
+| `config/` | the desktop settings app (egui) and its privileged helper; `sys_linux.rs` / `sys_windows.rs` hold everything platform specific, `install.rs` is the Windows installer |
 | `assets/i18n/` | UI strings (`strings.json`) and locales (`langs.json`); `tools/gen-i18n.py` generates `core/src/i18n_data.rs` |
-| `tools/` | build, asset generation, QEMU harness, USB stick helper |
+| `tools/` | build, asset generation, QEMU harness, USB stick helper (`.sh` for Linux, `.ps1` for Windows) |
 
 ## License
 

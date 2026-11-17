@@ -267,6 +267,8 @@ pub fn run(scan: Scan, vols: alloc::vec::Vec<Vol>) -> ! {
                 }
                 drop(menu);
                 drop(screen);
+                // Also stops a PS/2 touchpad's reports before the loader starts.
+                drop(input);
                 if let Err(err) = boot::launch(&e.kind, &vols) {
                     crate::trace::line(&format!("launch failed: {}", err));
                     crate::trace::flush();

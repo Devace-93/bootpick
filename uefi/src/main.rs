@@ -9,6 +9,7 @@ mod boot;
 mod display;
 mod esp;
 mod input;
+mod ps2;
 mod scan;
 mod shell;
 mod trace;
